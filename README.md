@@ -255,10 +255,52 @@ k8s集群由一组运行容器化应用程序的节点组成，主要角色包�
 |**k8s**|容器编排|打分机制|Cgroups|etcd+HA Proxy|心跳机制|数千|
 
 ## 2. 离线计算范式
+离线计算指的是批处理计算，如离线报表、数据分析等应用，离线计算相对于在线计算有以下特点：
+1. 计算量大
+2. 数据量大
+3. 数据不发生变化
+4. 运行周期长
 ### 2.1 MapReduce
+MapReduce是一个基于集群的高性能并行计算范式，允许用户通过编写简单的Map和Reduce方法来实现计算任务的并行处理而不用关心其并行化的实现细节以及任务的容错处理，减轻了开发人员的负担。  
+#### 2.1.1 Map流程
+首先我们了解MapReduce的流程，Map任务的流程如图所示：
+> ![Image text](./MapReduce/MapProcess.png)
+> 图片来源Github
+
+重点流程：Map任务默认采用TextInputFormat（InputFormat实现类）的RecordReader（成员变量）的read()方法读取外部数据并返回kv键值。然后对每个kv键值调用map()方法，当context.write()被调用时，数据会被写到环形缓冲区中（默认100MB），当缓冲区写满后，对缓冲区的内容进行排序（快排与归并排序）与压缩，这个期间会产生多个临时小文件，但最后合并成一个文件，让Reduce任务从这个文件中读取数据。
+#### 2.1.2 Reduce流程
+Reduce任务的流程图如图所示：
+> ![Image text](./MapReduce/ReduceProcess.png)
+> 图片来源Github
+重点流程：Reduce任务通过网络向Map任务的输出文件获取对应分区的数据，并调用reduce()方法，最终调用OutputFormat.RecordWriter的write方法将结果写入到HDFS或其他数仓中。
+#### 2.1.3 Hadoop实现的输入格式
+InputFormat的实现类包括：TextInputFormat、KeyValueTextInputFormat以及SequenceFileInputFormat
+1. TextInputFormat：默认读取方式，Value是一行数据
+2. KeyValueTextInputFormat：每一行都是键值对，用制表符隔开
+3. SequenceFileInputFormat：二进制的键值对，键值对都是可序列化的
+
+#### 2.1.4 环形缓冲区底层
+采用字节数组实现，前半部分记录KV索引位置，后半部分记录KV数据。读写过程采用单生产者消费者模式。如图所示：
+> ![Image text](./MapReduce/RingBuffer.png)
+> 图片来源CSDN
+#### 2.1.5 Shuffle的缺陷
+* 磁盘IO问题：每个Map都会有多个溢写文件写入到磁盘
+* 网络IO问题：当数据量较少，但Map和Reduce任务很多时，会产生较多网络IO
+#### 2.1.6 全排序
+在MR中实现全局排序有以下三种方法：
+1. 设置一个Reduce方法，所有Map方法得到的结果都会发送到Reduce并进行排序
+2. 自定义分区函数的分界点，按照排序的Key进行分区，分区之间有序，分区内部有序，从而全局有序（会出现数据倾斜的问题）
+3. 基于数据采样的全局排序，对待排序数据进行抽样（分片采样，随机采样，间隔采样），产生分割点，按照第二种方式排序。
+#### 2.1.7 辅助排序（二次排序）
+自定义组合键，在Map方法中将键值对的键改为键值的组合键，然后自定义分区函数以及排序函数（Comparator），在Shuffle中完成键的排序以及值的排序。（MR默认会在Shuffle对键进行排序）。
 ### 2.2 Spark
 
-## 3. 在线计算范式
+## 3. 实时计算范式
+实时计算也称为流式计算，如实时监控、实时ETL等应用，实时计算相对于离线计算有以下特点：
+1. 时延要求高
+2. 数据量少
+3. 计算量少
+4. 运行周期短
 ### 3.1 Spark Streaming
 ### 3.2 Flink
 ### 3.3 Storm

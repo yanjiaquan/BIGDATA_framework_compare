@@ -272,6 +272,7 @@ MapReduce是一个基于集群的高性能并行计算范式，允许用户通�
 Reduce任务的流程图如图所示：
 > ![Image text](./MapReduce/ReduceProcess.png)
 > 图片来源Github
+
 重点流程：Reduce任务通过网络向Map任务的输出文件获取对应分区的数据，并调用reduce()方法，最终调用OutputFormat.RecordWriter的write方法将结果写入到HDFS或其他数仓中。
 #### 2.1.3 Hadoop实现的输入格式
 InputFormat的实现类包括：TextInputFormat、KeyValueTextInputFormat以及SequenceFileInputFormat
@@ -294,6 +295,86 @@ InputFormat的实现类包括：TextInputFormat、KeyValueTextInputFormat以及S
 #### 2.1.7 辅助排序（二次排序）
 自定义组合键，在Map方法中将键值对的键改为键值的组合键，然后自定义分区函数以及排序函数（Comparator），在Shuffle中完成键的排序以及值的排序。（MR默认会在Shuffle对键进行排序）。
 ### 2.2 Spark
+Spark是加州大学伯克利分校（UC Berkeley）开源的基于内存的通用并行框架。相比于MapReduce，Spark将数据缓存在内存中，减少了多余的IO消耗，直到计算得到最后的结果再将结果写入磁盘中。  
+Spark包含以下四个模块：
+1. Spark SQL：基于Spark的SQL查询引擎，将SQL转化为Spark RDD运行（类似Hive将SQL转化为MR）
+2. Spark MLlib：提供支持集群模式的机器学习算法
+3. Spark GraphX：提供基于图的算法，如PageRank
+4. Spark Streaming：Spark的流式计算框架，处理实时数据（类似Flink）
+
+本章节将会对比Spark与MapReduce的系统架构以及原理，Spark SQL与Spark Streaming将在后续章节提及。
+#### 2.2.1 系统架构
+Spark的核心类是弹性分布式数据集（Resilience Distributed Dataset, RDD），封装了一个存在依赖关系、容错、可并行、弹性（自动在内存与硬盘之间切换）的数据集。  
+
+Spark集群存在以下角色：DAGScheduler、TaskScheduler以及Executor。Spark应用程序从提交到被执行的基本流程如图所示：
+> ![Image text](./Spark/SparkArchitecture.png)
+> 图片来源CSDN
+
+首先，用户程序启动SparkContext，系统自动初始化DAGScheduler以及TaskScheduler，DAGScheduler根据用户提交的有向无环图进行调度，按照拓扑序遍历RDD，当遇到窄依赖时，将当前RDD放入当前Stage，遇到宽依赖新增一个Stage。每个Stage按照分区函数（HashPatitioner和RangePatitioner）划分出一个TaskSet，交给TaskScheduler进行调度。TaskScheduler为每个task分配计算资源并提交到Executor执行。  
+此外，Spark支持四种运行模式：
+1. Local模式，用来调试代码
+2. Standalone模式，独立部署模式，Spark自带的集群部署模式，不依赖于其他资源管理系统独立运行Spark分布式程序
+3. YARN模式，将Spark任务交给YARN调度
+4. Mesos模式，将Mesos交给Mesos调度，Mesos支持粗粒度以及细粒度调度（参考第一章）
+#### 2.2.2 RDD算子
+RDD的基本算子包括三种：转化算子（Transformation）、行动算子（Action）、控制算子（Controller）。
+1. 转化算子：包括map、filter、flatMap、sample、groupByKey，将一个RDD转化为新的RDD
+2. 行动算子：包括count、coect、reduce、save，将一个RDD转化为Scala基本类型
+3. 控制算子：包括cache、persis指令，将RDD在内存或硬盘中进行缓存
+#### 2.2.3 容错机制
+不同于MapReduce将容错交给YARN处理，Spark针对三大层面（调度层、任务层、节点层），RDD容错有以下处理方法：
+1. DAG调度：Stage输出失败，DAGScheduler进行重试重新调度DAG
+2. task计算失败：Executor对失败的task进行重新计算
+3. 节点死机：RDD血缘（Lineage）容错+检查点容错，针对窄依赖的RDD丢失，可以重算其父RDD完成容错，针对宽依赖，重算的计算开销较大，可采用checkpoint备份，当数据丢失时，从checkpoint开始算即可。
+#### 2.2.4 Shuffle
+与MR类似，Spark的两个Stage之间通过Shuffle进行连接，前一个Stage的最后一个RDD作为Map任务，后一个Stage的第一个RDD作为Reduce任务。
+Spark的Shuffle实现方式包括Hash Based Shuffle（弃用）和Sort Based Shuffle，其中Hash Based Shuffle会产生多个临时文件并影响性能，在Spark1.2及后续版本中已经弃用。    
+当分区数较少时（小于200）并且Map任务没有聚合操作，会采用BypassMergeSortShuffleWriter（没有排序，最终合并成一个文件）进行溢写磁盘，当分区数少于16777216并且没有Map端聚合操作时，采用UnsafeShuffleWriter（分区内有序）进行溢写磁盘，其他情况采用SortShuffleWriter（全局有序）进行溢写。
+相比于MR的Shuffle做出的优化：
+1. 对分区数少并且没有聚合类shuffle算子（reduceByKey）不进行排序，提高了性能。
+2. 采用AppendOnlyMap/ExternalAppendOnlyMap减少了内存使用量
+3. 对于Shuffle read的文件为本地文件，MR采用网络下载数据，Spark直接读取本地文件
+#### 2.2.5 内存结构
+Spark运行在JVM上，因此Spark包含由JVM管理的堆内内存以及通过JDK Unsafe操作的堆外内存，其中Spark程序中一般对象所占用的内存为堆内内存，堆外内存用作提高Shuffle时排序的效率。  
+Spark的内存分配经过1. 静态内存管理机制 2. 统一内存管理机制。其中1.静态内存管理的堆内分配如图所示：
+> ![Image text](Spark/StaticMemoryOnHeap.png)  
+> 图片来源尚硅谷
+
+静态内存管理机制的堆外内存管理如图所示：
+> ![Image text](./Spark/StaticMemoryOffHeap.png)
+> 图片来源尚硅谷
+
+相比于堆内内存，堆外内存减少了保留部分，这是因为堆外内存可被精确控制不会出现OOM情况。然而，静态内存管理在极端情况（一部分内存被占满，另一部分空余）的资源利用率低下，Spark在新版本中提出了统一内存管理。  
+统一内存管理的存储内存和执行内存共享一块空间，可以动态占用对方的空闲区域，堆内内存划分如图所示：
+> ![Image text](./Spark/UnionMemoryOnHeap.png)  
+> 图片来源尚硅谷
+
+统一内存管理的堆外内存分配如图所示：
+> ![Image text](./Spark/UnionMemoryOffHeap.png)  
+> 图片来源尚硅谷
+
+统一内存管理的动态占用机制如图所示：
+> ![Image text](./Spark/UnionMemoryMechanism.png)  
+> 图片来源尚硅谷
+
+当双方空间都不足时，存储到硬盘，当一方空间不足而对方空余可借用部分空间。当执行内存的空间被占用时，可让存储内存占用的部分转存到硬盘，归还借用的空间。但存储内存的空间被占用后，不能让执行内存归还。
+#### 2.2.6 数据倾斜
+当其中一个任务计算量特别大而其他任务相对少时，就发生了***数据倾斜***现象，计算量大的计算任务所需要的时间久，而计算量少的任务需要时间短，而Spark每个Stage完成时间取决于完成时间最久的子任务。因此，解决数据倾斜问题对Spark任务效率有显著提升。  
+解决方法可参考以下方案：
+1. 利用Hive ETL预处理数据，优点：每天执行一次Hive预处理，实现简单，规避数据倾斜，缺点：治标不治本，Hive中还是会发生数据倾斜
+2. 在不影响最终结果的情况下，过滤少数导致倾斜的Key，优点：实现简单，规避数据倾斜，缺点：实际中导致数据倾斜的Key较多，实现起来较难
+3. 提高Shuffle并行度，提高Shuffle read任务数量，优点：实现简单，缓解数据倾斜，缺点：根本问题还在，当一个Key对应大量数据时不起作用
+4. 两阶段聚合，局部聚合前给Key加上随机数，全局聚合再去掉随机数，优点：性能优异，规避数据倾斜，缺点：仅适合聚合类的Shuffle操作
+5. Reduce端Join改成Map端Join，使用Broadcast变量缓存小表，优点：不会发生数据倾斜，缺点：仅适合一个大表+一个小表
+6. 采样产生倾斜的Key并分拆Join操作，对于少数导致数据倾斜的Key，从原RDD进行分拆，加上随机数再进行join，优点：有效打散key避免数据倾斜，缺点：不适合存在较多导致数据倾斜的Key
+7. 使用随机前缀和扩容RDD进行Join，第六点的升级版，优点：几乎可以处理join操作，缺点：对内存资源要求高
+8. 多种方法叠加使用
+
+### 2.3 MR与Spark对比
+| 技术 | 用途 |容错|内存结构|Shuffle|算子|应用场景|
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+|**MR**|并行计算范式（简单）|由YARN处理|JVM默认|排序+产生较多文件+占用内存较多|只有Map和Reduce|大规模数据并行处理|
+|**Spark**|并行计算框架（复杂）|三个层面解决|统一内存管理机制|可能不排序+产生一个文件+占用内存少|三类算子（action+transformation+controller）|迭代式计算|
 
 ## 3. 实时计算范式
 实时计算也称为流式计算，如实时监控、实时ETL等应用，实时计算相对于离线计算有以下特点：

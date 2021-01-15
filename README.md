@@ -427,7 +427,7 @@ Flink的特点：
 #### 3.2.2 关键概念
 Flink程序由流（Stream）、转换（Transformation Operator）两个基本概念组成。其中Stream是一个中间处理结果数据，Transformation Operator是对一个或多个Stream的操作。  
 如图所示，与Spark类似，Flink程序被执行时，将会被映射成数据流图（Streaming DataflowStream，类似于DAG），由一个或多个Source Operator，结束于一个或多个Sink Operator，同时每个Stream可被分成多个Stream分区（Partitions），这些分区可以以One2One（窄依赖）或Redistributing（宽依赖）进行数据传输。
-> ![Image text](./Flink/FLinkDataFlow.svg)  
+> ![Image text](./Flink/FLinkDataFlow.png)  
 > 图片来源Flink官网
 #### 3.2. 时间
 处理Stream中的记录时，记录中通常会包含各种典型的时间字段：
@@ -435,7 +435,7 @@ Flink程序由流（Stream）、转换（Transformation Operator）两个基本�
 1. Event Time：表示事件创建时间
 2. Ingestion Time：表示事件进入到Flink的时间
 3. Processing Time：表示某个Operator对事件进行处理的本地系统时间
-> ![Image text](./Flink/FlinkTimes.svg)  
+> ![Image text](./Flink/FlinkTimes.png)  
 > 图片来源Flink官网
 
 Flink通过定义一种特殊的record（watermarks）来衡量当前时间，暗示接下来所有的数据的时间都会大于这个值，小于这个值将会视为迟来数据，通过其他机制处理：1. 直接丢弃迟到数据，2. 将迟到数据输出到单独数据流中，实现侧输出，3. 根据迟到的时间更新结果

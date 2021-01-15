@@ -383,8 +383,121 @@ Spark的内存分配经过1. 静态内存管理机制 2. 统一内存管理机�
 3. 计算量少
 4. 运行周期短
 ### 3.1 Spark Streaming
+Spark Streaming可实现高吞吐量，具有容错机制的实时流（微批）数据处理，支持Kafka、Flume、HDFS等各种数据源。  
+与Spark完全离线处理数据存在一点区别，Spark Streaming将接受到的实时数据流按照时间间隔（秒级）分成一批批的数据，然后通过Spark处理这些数据，最终得到一批批（不同时间节点）的结果。因此，Spark Streaming提出离散流（DStream）对RDD进行封装以适合实时数据处理场景。  
+Spark Streaming的特点有：
+1. 较低延迟，牺牲一点延迟换取更高的吞吐量
+2. 吞吐量高，基于Spark，Spark批处理的吞吐量高
+3. 易用，与Spark结合科用一套代码可解决批处理和流处理
+4. 容错，Spark集成了三个层面的容错
+5. Exactly-once，每个数据只消费一次
+
+接下来介绍Spark Streaming的关键类DStream。
+#### 3.1.1 DStream
+DStream由一系列连续的RDD表示，可以由实时数据流构建，也可以通过原有DStream构建。例如，对每秒的数据进行wc统计，lines DStream代表接受到的实时数据，word DStream代表转化后的实时数据，如图所示：
+> ![Image text](./SparkStreaming/DStreamOps.png)
+> 图片来源Spark官网
+#### 3.1.2 记录状态
+普通的RDD是不保存状态的，即只记录这一段时间的数据并进行处理，如果需要记录从开始到当前的一些变量可采用updateStateByKey或mapWithState进行记录，实现的原理如图所示：
+> ![Image text](./SparkStreaming/SparkStreamingState.jpeg)
+> 图片来源微信公众号
+
+采用上述API的DStream在每个间隔的RDD在执行完成后都会作为下一个RDD的前继节点，从而实现历史数据的访问，实现“有状态”的DStream
+#### 3.1.3 时间间隔
+DStream提供了窗口操作，即隔一段时间处理一个窗口时间段的数据，DStream的时间间隔包括批处理间隔、滑动间隔和窗口间隔。其中批处理间隔指的是隔多久将所收集到的数据构建成一个RDD，滑动间隔指的是隔多久更新滑动窗口，窗口间隔指的是窗口的大小，一般而言，滑动间隔与批处理间隔一致，如图：批处理间隔为1秒，滑动间隔为2秒，窗口间隔为3秒，指的是，每隔1秒构建一个RDD，每隔2秒统计前3秒的数据。
+> ![Image text](./SparkStreaming/DstreamWindow.png)  
+> 图片来源Spark官网
+#### 3.1.4 反压机制
+当微批的处理时间大于接受数据的间隔间隔，会导致内存积压最终OOM的情况，在Spark Streaming1.5版本之前可以设置参数spark.streaming.receiver.maxRate限制接受速率，在1.5版本之后Spark Streaming引入了动态反压机制，通过动态控制数据接受速率来适配集群数据处理能力。
 ### 3.2 Flink
+Flink是一个分布式处理引擎，支持实时流处理以及批处理，把批处理当做流处理的一个特例（Spark把流处理看作一系列批处理），进行实时流处理时，数据流是无界的，进行批处理时，数据流是有界的。同时，Flink支持Local（调试）、Standalone、YARN以及Kubernetes等多种方式部署。  
+Flink的特点：
+1. 支持高吞吐、低延迟的流处理
+2. 支持窗口操作
+3. 支持Exactly-once语义
+4. 支持迭代计算
+5. 支持程序自动优化：自动避免Shuffle、排序，自动进行缓存
+6. 实现Flink自己的内存管理
+7. 支持基于轻量式分布式快照实现的容错
+
+#### 3.2.1 Flink作业提交流程
+如图所示，由用户编写Flink程序代码，经过优化后转化成数据流图，提交给JobManager，JobManager再调度这些任务到各个TaskManger上执行，然后TaskManager负责将心跳以及统计信息回报给JobManager，同时，TaskManger之间将会以流的形式进行数据的传输。由图可知，Flink以多线程的方式处理多个Job和Task，缺少资源隔离机制。
+> ![Image text](./Flink/FlinkArchitecture.jpeg)  
+> 图片来源搜狐
+#### 3.2.2 关键概念
+Flink程序由流（Stream）、转换（Transformation Operator）两个基本概念组成。其中Stream是一个中间处理结果数据，Transformation Operator是对一个或多个Stream的操作。  
+如图所示，与Spark类似，Flink程序被执行时，将会被映射成数据流图（Streaming DataflowStream，类似于DAG），由一个或多个Source Operator，结束于一个或多个Sink Operator，同时每个Stream可被分成多个Stream分区（Partitions），这些分区可以以One2One（窄依赖）或Redistributing（宽依赖）进行数据传输。
+> ![Image text](./Flink/FLinkDataFlow.svg)  
+> 图片来源Flink官网
+#### 3.2. 时间
+处理Stream中的记录时，记录中通常会包含各种典型的时间字段：
+
+1. Event Time：表示事件创建时间
+2. Ingestion Time：表示事件进入到Flink的时间
+3. Processing Time：表示某个Operator对事件进行处理的本地系统时间
+> ![Image text](./Flink/FlinkTimes.svg)  
+> 图片来源Flink官网
+
+Flink通过定义一种特殊的record（watermarks）来衡量当前时间，暗示接下来所有的数据的时间都会大于这个值，小于这个值将会视为迟来数据，通过其他机制处理：1. 直接丢弃迟到数据，2. 将迟到数据输出到单独数据流中，实现侧输出，3. 根据迟到的时间更新结果
+
+#### 3.2. 窗口
+Flink支持基于时间（最近几分钟）的窗口操作也支持基于数据（最近100个数据）的窗口操作。Flink提供了以下三种窗口支持：
+1. 没有覆盖窗口（Trumbling Windows），一定时间间隔或者一定计数数量的窗口大小，不会出现数据覆盖。
+2. 滑动窗口（Sliding Windows），以一定间隔滑动，取一定窗口大小的数据。
+3. 会话窗口（Session Windows），如图所示根据Session Gap划分不同的窗口，当一个窗口在大于Session Gap的时间内没有接受到新数据，就关闭窗口。
+> ![Image text](./Flink/FlinkWindows.jpg)  
+> 图片来源知乎
+
+#### 3.2. 容错机制
+Flink的容错机制是在分布式快照算法Chandy-Lamport的基础上实现的，支持Exactly-Once和At-Least-Once语义，要求数据源能够重放数据流（如Kafka）。  
+具体流程：每隔一段时间，JM会产生特殊的Record称为Checkpoint Barrier（区分WaterMark），会带有Checkpoint ID用以区分不同阶段的流，在Barrier之前的Records包含在该Checkpoint之中，之后的Record被包含在下一个Checkpoint之中，数据源在接受到这个信息时，每个数据源都会立即对自身状态进行备份，并记录到远程存储上，之后向下游的任务进行广播这个Barrier。
+> ![Image text](./Flink/FlinkBarrierSource.jpg)  
+> 图片来源cnblog
+
+当下游的任务接到这个Barrier时，就会暂停处理这个Source流入的数据，同时将这些数据放入缓冲区并等待其他相同ID的Barrier达到，当所有相同ID的Barrier达到后，将自身状态进行备份记录到远程存储系统上，并广播Barrier到下游，同时优先发送缓冲区的内容到下游。
+> ![Image text](./Flink/FlinkBarrierProcess.jpg)  
+> 图片来源cnblog
+
+以上Barrier对齐的方式可实现Exactly-Once语义。类似的，在出现一个新ID的Barrier达到时不缓冲数据并继续处理数据，当最后一个相同ID的Barrier达到时对状态进行备份，就可用降级为At-Least-Once，。
+#### 3.2. 有状态操作
+提供托管的键控State（Keyed State）以及算子State（Operator State）
+#### 3.2. Flink内存管理
+大数据框架需要解决JVM存在的问题：
+1. 小对象开销，在Java一切皆对象，每个对象还在那用的内存空间必须是8的倍数，尽管存储一个布尔值的对象也会占用16字节，存在极大资源浪费。
+2. GC压力大， 大数据占用几十上百G的内存，进行一次GC会阻塞进程很久时间
+3. 容易出现OOM，在进行大数据量的sort/join时尤其明显
+
+第一部分，Flink实现自身的内存管理，如图所示，Flink将内存管理分为三部分，
+1. Network Buffers，默认分配2048个32K大小的块用来缓存网络数据，
+2. Free，留给用户代码以及TaskManager使用，变化频繁，存在于JVM新生代
+3. Memory Manage Poll，存在大量Memory Segment，存储二进制数据而不是序列化对象，用于运行Sort/Join/Shuffle等算子，占用70%的内存，存在于老年代，不会被GC回收
+> ![Image text](./Flink/FlinkHeap.webp)  
+> 图片来源简书
+
+同时，Flink在进行sort/join时采用类似数据库的做法，直接操作二进制数据，减少序列化和反序列开销。综上，采用以上方法所能达到的优点：
+1. 减少GC压力，Memory Manage管理大对象的分配，避免Full GC
+2. 避免OOM，使用外部排序减少大数据量sort/join的内存开销
+3. 节省内存空间，存储二进制数据而不需要序列化
+4. 二进制操作更加高效
+
+第二部分，定制序列化框架，采用二进制查询
+第三部分，使用堆外内存进行零拷贝读写硬盘或网络传输
+#### 3.2. 反压机制
+Flink的反压机制分为：TaskManager内部的反压以及跨TaskManager的反压  
+TaskManager内部的反压实现原理：Flink使用一个进程管理两个Task，Task之间可通过堆上的阻塞缓冲区进行通信，当任务A的下游任务是任务B，如果任务B的速度比任务A慢，任务B将会在阻塞缓冲区中积累大量数据以至于大小超出限制，不能插入新的数据，导致任务A也得不到空余内存用来处理新的数据，造成任务A的减速。  
+跨TaskMangager的反压实现原理：Flink内部使用Netty发送与接收数据，假设任务B是跨TaskManager的任务A的下游，任务B的速度较慢，分配给Netty的内存（Network Buffer））很快被占满，以至于任务A不能再发送新的数据给任务B，导致任务A所拥有的Network Buffer也占满，造成阻塞
 ### 3.3 Storm
+#### 3.3.1 系统架构
+#### 3.3.2 容错机制
+#### 3.3.3 At-Least-Once语义
+#### 3.3.4 反压机制
+### 3.4 对比
+| 技术 | 用途 |延迟|吞吐量|容错|语义|反压|
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+|**Spark Stream**|实时处理|秒级|大|与Spark一致|At-Least-Once|调整接受率|
+|**Flink**|实时流处理|亚秒级|大|Checkpoint|Exactly-Once|阻塞队列|
+|**Storm**|实时流处理|毫秒级|较低|Record-ACK|Exactly-Once|基于ZK|
+
 
 ## 4. 分布式协调系统
 ### 4.1 Zookeeper
@@ -404,6 +517,7 @@ Spark的内存分配经过1. 静态内存管理机制 2. 统一内存管理机�
 ## 7. SQL查询引擎
 ### 7.1 Hive
 ### 7.2 Spark SQL
+### 7.3 Flink SQL
 
 ## 8. OLAP
 ### 8.1 Kylin

@@ -600,21 +600,206 @@ Paxos更为通用（每个Proposer都可以提案），ZAB只有Leader可以发�
 |**Eureka**|服务发现与注册|不保证强一致性|读写可在任意节点，吞吐量高|开源|实现AP|
 
 ## 5. 消息队列
+Message Queue 消息队列（MQ）是一种应用程序与应用程序的通信方法。MQ是消费-生产者模型的一个典型的代表，一端往消息队列中不断写入消息，而另一端则可以读取队列中的消息。消息队列的应用场景包含以下三种：**削峰、异步和解耦**。
 ### 5.1 Kafka
+Kafka是一个具有分区机制、副本机制、容错机制、分布式的发布订阅系统使用，该系统主要包含以下概念：
+> ![Image text](./Kafka/KafkaArchitecture.png)  
+> 图片来源尚硅谷
+
+1. Producer：生产者，向Broker发消息的客户端
+2. Consumer：消费者，向Broker取消息的客户端
+3. Consumer Group：消费者组，由多个Consumer组成。消费者组内每个消费者负责消费不同分区的数据，一个分区只能由一个组内消费者消费；消费者组之间互不影响
+4. Broker：缓存代理，一个Kafka节点就是一个Broker，每个Broker可容纳多个Topic
+5. Topic：消息源的不同分类
+6. Partition：Topic物理上的分组，一个Topic可分为多个Partition，每个Partition都是一个有序队列
+7. Replica：副本，保证分区的Partition数据不丢失，每个Topic的每个分区都有若干副本
+8. Leader：一个Partition中有且仅有一个Leader，负责数据的的读写
+9. Follower：负责从Leader中同步数据
+
+Consumer Group需要保证自己的消费记录位移信息，在Kafka0.9版本之前将Offset保存在ZK中，在0.9版本之后将Offset保存在系统Topic上。
+#### 5.1.1 文件存储机制
+Kafka以Topic进行消息分类，Topic以Partition形式存储在节点上，每个Partition在不同节点上有多个副本，一个节点上的Partition以多个Segment组成，每个Segment由一个Log文件和一个Index文件组成。生产者生产的消息会不断追加到Log文件末尾。消费者消费的记录会保存在ZK或系统Topic上。
+#### 5.1.2 ACK确认机制、ISR、HW和LEO
+1. 数据可靠性保证：为保证Producer发送的数据能够被可靠地发送到指定Topic的特定Partition，Partition在收到Producer发送的数据后，要向Producer发送ACK，Kafka选择的方案为，当Partition的Leader接受到Producer信息后，同步到所有Follower，当所有Follower同步成功后，才向Producer发送ACK。（容忍n个副本故障需要n+1个节点）  
+2. In-Sync Replica Set（ISR）：和Leader同步的Follower集合，当Follower长时间未和Leader同步时，将会被踢出ISR，同时Leader故障时，从ISR从选举新的Leader
+3. ACK确认机制：Producer根据可靠性和延迟进行选择，包括三种选择0,1,-1，0代表Producer不等待Broker的ACK，可能会丢失数据（At Most Once），1代表仅等待Leader成功落盘后返回ACK，可能会丢失数据，-1代表等待Leader和Follower的落盘后返回ACK，可能会数据重复（At Least Once）
+4. Log End Offset（LEO）：每个副本最大的Offset
+5. High Watermark（HW）： 所有副本中最小的LEO
+
+当Follower发送故障的时候，会踢出ISR，待Follower恢复后，截取掉高于HW的记录并向Leader进行同步，等该Follower的LEO大于等于HW时，可以重新加入ISR。  
+当Leader发生故障时，从ISR从选举一个新的Leader，其余Follower将各自Log文件高于HW的部分截掉，然后从新的Leader同步数据。
+#### 5.1.3 Exactly Once语义
+Kafka的Exactly Once实现方式：At Least Once + 幂等性 = Exactly Once。幂等性指的是，无论Producer发送多少重复数据，Leader只会持久化一条。  
+具体实现方式：每个Producer带有PID，向Broker发送数据时会带有<PID, Partition, SeqNumber>信息，当Broker接受到相同的PID、Partition和SeqNumber时，只会持久化一条。目前Kafka只能保证在同一分区同一会话做到Exactly Once语义。
+#### 5.1.4 分区策略
+包含Range和RoundRobin两种
+#### 5.1.5 消息顺序性
+Kafka的**Partition分区**概念，Kafka的Topic内的一个Partition对应一个Consumer，在一个Partition内，消费的顺序是有序的，如果需要Topic所有消息都有序，只能让Topic产生一个分区，也就只有一个Consumer进行消费。
 ### 5.2 RabbitMQ
-### 5.3 Redis
+RabbitMQ是使用Erlang语言来编写的，并且RabbitMQ是基于AMQP协议的。Erlang语言在数据交互方面性能优秀，有着和原生Socket一样的延迟，这也是RabbitMQ高性能的原因所在。可谓“人如其名”，RabbitMQ像兔子一样迅速。
+#### 5.2.1 JMS
+Java Message Service（JMS）指的是**Java**平台的消息中间件API，通常包含以下角色：JMS Provider、JMS Clinet、JMS Producer、JMS consumer、JMS Queue（p2p模式）和JMS Topic（发布\订阅模式）。常见的消息队列大部分实现了JMS API可以担任JMS Provider角色，如ActiveMQ、Redis和RabbitMQ。
+#### 5.2.2 AMQP
+Advanced Message Queuing Protocol（AMQP）是一种类似Http的链接协议，因此可以跨平台使用，如使用Java的Provide，同时使用Python的Producer和Rubby的Consumer。相比于JMS，AMQP增加了Exchange和Bingding角色。AMQP包含以下几个重要概念：
+1. Server：接受客户端的连接
+2. Connection：客户端与Server的TCP连接
+3. Channel：信道，消息读写操作在信道中进行，客户端可以建立多个信道，每个信道代表一个会话（多个信道复用一个Connection连接）
+4. Message：消息
+5. Virtual Host：虚拟主机，进行逻辑隔离，包含若干个Exchange和Queue，同一虚拟主机不能有同名的Exchange和Queue
+6. Exchange：接受信息并将信息发送到一个或多个Queue
+7. Binding：包含多个RoutingKey，用来映射消息到相应的消息队列
+8. RoutingKey：路由键，指定路由规则
+9. Queue：消息队列，供消费者消费
+
+AMQP的系统模式如图所示：
+> ![Image text](./RabbitMQ/AMQP.png)
+> 图片来源于cnblogs
+
+#### 5.2.3 常用交换器
+RabbitMQ常用的交换器类型有Direct、Topic、Fanout、Headers四种。
+1. Direct：表示将发送到该交换器的消息转发到RoutingKey指定的队列中
+2. Topic：类似Direct，区别是可以进行模糊匹配，"."代表一个词，"#"代表一个或多个词
+3. Fanout：不处理路由键，转发到所有绑定的队列中
+4. Headers：根据Header进行匹配，较少用
+
+#### 5.2.4 消息时序控制
+在多个客户端连接的情况下，尽管RabbitMQ发送数据是有序的，但由于网络延迟，RabbitMQ无法保证客户端读取到的信息是有序的。  
+发送RabbitMQ的每条信息都可以关联一个TTL属性，当超过该时间还没处理时，将会移到死信交换器（DLX）上，同时，支持延迟或预定时间的消息发送。
+#### 5.2. At Least Once和At Most Once
+RabbitMQ在不处理故障时可以保证At Most Once，同时提供交付重试和死信交换器处理实现At Least Once。
+
+
+#### 5.2.5 高可用
+RabbitMQ是一种基于主从结构的消息代理，通过镜像集群模式实现高可用，在高可用模式下，所有的服务节点都拥有相同的实际数据，任意消费者都可向任意节点消费，任意节点宕机不影响其他节点消费。
+### 5.3 RocketMQ
+#### 5.3.1 系统结构
+#### 5.3.2 顺序消费、重复消费
+#### 5.3.3 分布式事务
+### 5.4 三者对比
+| 技术 | 用途 |模型|优点|支持事务|拓展性|
+|:---:|:---:|:---:|:---:|:---:|:---:|
+|**Kafka**|消息队列|主题模型|高吞吐，较低延迟|不支持|较好|
+|**RabbitMQ**|消息队列|队列模型|低吞吐，低延迟|支持|较差|
+|**RocketMQ**|消息队列|主题模型|高吞吐，较低延迟|不支持|较好|
 
 ## 6. 数据库
+随着用户基础越来越多，所生成的数据量也越来越大，各种规模的组成也开始有处理大数据的需求，而目前关系型数据库（如Mysql）在拓展方面几乎已到达极限。同时，业界对此也有新的解决方案，非关系型数据库（NoSQL），可用于超大规模的存储，拓展性极佳，满足CAP理论中的两个，但不支持ACID特性。下面介绍两种NoSQL：HBase以及Redis，和传统关系型数据库Mysql。
 ### 6.1 HBase
-### 6.2 Mysql
-### 6.3 Redis
+HBase是一种NoSQL数据库，不能完美地支持SQL，缺少关系型数据库的许多特点，如列类型，辅助索引，触发器等。但换来的是：
+1. 强读写一致性
+2. 自动分片
+3. 自动故障转移
+4. Hadoop/HDFS集成
+5. 块缓存，布隆过滤器，高效的列查询
+
+#### 6.1.1 系统结构
+如图所示，HBase具有一个HMaster以及多个HRegionServer，他们之间通过ZK进行协调，最终将数据存到HDFS中，每个HRegion有一个预写日志文件（HLog，也叫WAL）和多个列簇（Store），一个Store包含一个MemStore和多个StoreFile（HFile）。
+
+> ![Image text](./HBase/HBaseArchitecture.webp)
+> 图片来源于jianshu
+
+#### 6.1.2 HBase表的设计考虑因素
+HBase的关键概念：表，rowkey，列簇，时间戳
+1. 预分区，预先设置多个Region并设置startkey和endkey
+3. rowkey设计原则，越短越好，尽量散列，保证唯一
+4. 列簇设计原则，越短越好，不同列簇的数量级尽量相等，不超过三个
+#### 6.1.3 HBase读写过程
+##### 6.1.3.1 读过程
+1. 客户端访问ZK查找存储目标数据的Region信息，找到对应的RegionServer并发送读请求
+2. 先到MemStore查找数据，查不到再去BlockCache中查，在查不到就回去StoreFile上读，读到的数据放到BlockCache，BlockCache采用LRU淘汰最久未使用的数据
+##### 6.1.3.2 写过程
+1. 同读过程，先到ZK查找对应的RegionServer，发送写请求
+2. 将数据分别写到HLog和MemStore
+3. MemStore达到一定阈值后将文件Flush成一个StoreFile文件。（合并）
+4. 当多个StoreFile达到一定大小就触发Compact合并成一个StoreFile（合并）
+5. 当StoreFile超过一定阈值就会将当前Region切分成两个，并由HMaster分配到不同的HRegionServer实现负载均衡（切分）
+#### 6.1.4 HBase在写过程中的region的split过程
+共六种切分触发策略，这里介绍常见的三种：
+1. ConstantSizeRegionSplitPolicy：当一个Region中最大的Store（压缩后）大小大于设置阈值时才会触发切分
+2. IncreasingToUpperBoundRegionSplitPolicy：类似ConstantSizeRegionSplitPolicy，区别：阈值会随Region个数变化而变化
+3. SteppingSplitPolicy：类似ConstantSizeRegionSplitPolicy，区别：阈值根据Region的个数变化，当个数为1时，切分阈值为Flush*2，否则为MaxRegionFileSize
+
+切分点将会定位为整个Region中最大Store中的最大文件中最中心的一个Block的首个RowKey，如果RowKey是文件的第一个RowKey或者最后一个RowKey，将不会触发切分（或手动指定）。
+
+HBase的切分过程是一个事务，包含三个阶段：prepare-execute-（rollback）
+1. prepare阶段：在内存中初始化两个子Region，这个对象用来记录切分的进展
+2. execute阶段：如图所示，RegionServer修改ZK节点，Master通过Watch机制检测到Region改变，在内存中修改Region状态，RegionServer关闭Region服务并触发Flush操作，该Region的请求产生NotServingRegionException，在.split文件夹下创建两个子文件夹，内容包含reference文件和必要的数据结构，修改META表父Region状态和子Region状态，最后修改ZK状态
+3. 如果切分阶段出现异常，则执行rollback操作。
+> ![Image text](./HBase/HBaseSplitexecute.png)
+> 图片来源于Hortonworks
+#### 6.1.5 HBase过滤器
+HBase中比较过滤器（比较RowKey、列簇、值、时间），专用过滤器（比较某列的值、前缀）    
+HBase中除了比较过滤器和专用过滤器以外，还有布隆过滤器（BloomFilter）：  
+作用：提高随机读性能  
+原理：内部是一个bit数组，默认为0，当插入元素时，采用多个独立的Hash算法对下标设置为1，查询时采用相同的Hash算法得出下标，如果这些下标有一个不为1说明不存在该值
+#### 6.1.6 HBase优化策略
+1. 减少Region分类，预建分区
+2. 设置合理大小的HFile
+3. 关闭自动Compaction，在闲时进行Compaction
+4. 写入大量离线文件采用BulkLoad
+5. 开启过滤提高查询速度，开启压缩减少传输大小
+6. RowKey和列簇的合理设计
+### 6.2 Redis
+Redis是一种NoSQL数据库，与HBase不同，Redis的数据是保存在内存中的，同时也可以定期将数据持久化到硬盘上。
+特点：
+1. 速度快，基于内存的Key-Value数据库
+2. 单线程执行不存在上下文切换和同步问题
+3. 采用多路I/O复用模型（epoll）
+4. 采用子线程将内存持久化到硬盘
+#### 6.2.1 Redis集群
+#### 6.2.2 过期策略和缓存淘汰机制
+#### 6.2.3 持久化机制
+### 6.3 Mysql
+### 6.4 数据库之间对比
+| 技术 | 用途 |
+|:---:|:---:|
+|**HBase**|TB级数据存储|
+|**Redis**|会话缓存|
+|**Mysql**|GB级数据存储|
+
 
 ## 7. SQL查询引擎
-### 7.1 Hive
+介绍三种常用SQL执行引擎，分别适用于离线处理、准实时处理和实时处理
+### 7.1 Hive SQL
+Hive是基于Hadoop的数仓工具，将SQL转化为MR任务（Spark、Tez），并将数据存储在HDFS上，适合离线批量数据计算和数据分析，即数仓和OLAP
+#### 7.1.1 Hive系统结构
+Hive包含Driver、MetaStore以及执行引擎，Driver负责将SQL解析，进行优化输出为MR、Spark或Tez任务。Metastore负责存储和管理元信息服务，保存了数据库的基本信息和数据库表的定义，一般存储在关系型数据库上（如Mysql），执行引擎包含MR、Spark和Tez，根据采用的框架转化为相应的任务。
+> ![Image text](./Hive/HiveArchitecture.png)  
+> 图片来源于Hortonworks
+
 ### 7.2 Spark SQL
 ### 7.3 Flink SQL
 
-## 8. OLAP
+## 8. 即席查询
+即席查询是用户根据自己的需求，灵活的选择查询条件，系统能够根据用户的选择生成相应的统计报表。即席查询与普通应用查询最大的不同是普通的应用查询是定制开发的，而即席查询是由用户自定义查询条件的。以下介绍三种即席查询工具。
 ### 8.1 Kylin
+Apache Kylin是一个开源的分布式分析引擎，提供Hadoop之上的SQL查询接口及多维分析（OLAP）能力以支持超大规模数据，最初由eBay Inc. 开发并贡献至开源社区。它能在亚秒内查询巨大的Hive表。
+#### 8.1. Kylin核心概念
+Kylin的工作原理是MOLAP（Multidimension On-Line Analysis Processing）Cube，即多维立方体分析。接下来介绍Cube和Cuboid。
+1. 给定一个数据模型，我们可以对其所有维度进行聚合，对于N个维度来说，组合的可能性有2的n次方钟，对于每一种维度的组合，将度量值做聚合计算，然后将结果保存为一个物化视图，称为Cuboid
+2. 所有维度组合的Cuboid作为一个整体，成为Cube。
+
+如图所示，一个电商的数据模型中，维度包含时间[time]、商品[item]、地区[location]和供应商[supplier]，度量值为销售额。维度的组合共有2的4次方=16种。每一种维度的组合就是一个Cuboid，16个Cuboid整体就是一个Cube。
+> ![Image text](./Kylin/KylinCube.png)  
+> 图片来源于cnblogs
+
+#### 8.1. Kylin维度组合模式
+为避免Kylin的Cube维度指数增加，提供了以下几种Cube组合模式对Cube进行降维。
+1. 正常模式（Normal），N个维度构建2的N次方个Cuboid
+2. 维度强制模型（Mandatory），当某个维度（如时间维度）设置为Mandatory模式，Cube的构建只会包含时间维度的Cuboid。
+3. 依赖模式（Hierarchy），给定依赖关系（如省份依赖于国家），Cube的构建只会包含符合该依赖关系的Cuboid
+4. 衍生模式（Derived），指的是一个或多个维度可以由另一个维度生成，设置了衍生关系（如A->B，A->C）时，Cube的构建会包含A而没有B和C
+5. 联合模式（Joint），规定某些维度（如维度A和B）只能同时出现，Cube的构建包含那些AB同时出现的Cuboid或AB同时不出现的Cuboid
+#### 8.1. Cube构建算法
+##### 8.1. .1 逐层构建
+一个N维的Cube由一个N维子立方体、N个（N-1）维子立方体...N个1维子立方体和1个0维子立方体组成，按照逐层算法，每个层级都是按照它上一层级的结果来计算的，如N个（N-1）维的子立方体是由1个N维的子立方体去掉某个维度进行计算的。
+##### 8.1..2 快速Cube算法（逐段算法）
+主要思想为：每个Mapper将所分配到的数据库计算成一个完成的Cube（包含所有Cuboid），每个Mapper将计算完的Cube输出到Reduce合并，生成大Cube。
+#### 8.1. Cube在HBase中的存储
+每个Cuboid将会存储在HBase中，Cuboid的维度会映射为HBase的Rowkey，Cuboid的指标映射为HBase的Value。
+
+如图所示，原始表中有两个维度，kylin对维度值进行字典编码，拼接在Rowkey的“+”号后方，在“+”号的前方是确定哪些维度被选中
+> ![Image text](./Kylin/CubeHBase.png)  
+> 图片来源于CSDN
 ### 8.2 Impala
 ### 8.3 Presto

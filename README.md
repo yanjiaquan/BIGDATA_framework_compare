@@ -773,8 +773,8 @@ Hive包含Driver、MetaStore以及执行引擎，Driver负责将SQL解析，进�
 ## 8. 即席查询
 即席查询是用户根据自己的需求，灵活的选择查询条件，系统能够根据用户的选择生成相应的统计报表。即席查询与普通应用查询最大的不同是普通的应用查询是定制开发的，而即席查询是由用户自定义查询条件的。以下介绍三种即席查询工具。
 ### 8.1 Kylin
-Apache Kylin是一个开源的分布式分析引擎，提供Hadoop之上的SQL查询接口及多维分析（OLAP）能力以支持超大规模数据，最初由eBay Inc. 开发并贡献至开源社区。它能在亚秒内查询巨大的Hive表。
-#### 8.1. Kylin核心概念
+Apache Kylin是一个开源的分布式**分析引擎**，提供Hadoop之上的SQL查询接口及多维分析（OLAP）能力以支持超大规模数据，最初由eBay Inc. 开发并贡献至开源社区。它能在亚秒内查询巨大的Hive表。
+#### 8.1.1 Kylin核心概念
 Kylin的工作原理是MOLAP（Multidimension On-Line Analysis Processing）Cube，即多维立方体分析。接下来介绍Cube和Cuboid。
 1. 给定一个数据模型，我们可以对其所有维度进行聚合，对于N个维度来说，组合的可能性有2的n次方钟，对于每一种维度的组合，将度量值做聚合计算，然后将结果保存为一个物化视图，称为Cuboid
 2. 所有维度组合的Cuboid作为一个整体，成为Cube。
@@ -783,23 +783,101 @@ Kylin的工作原理是MOLAP（Multidimension On-Line Analysis Processing）Cube
 > ![Image text](./Kylin/KylinCube.png)  
 > 图片来源于cnblogs
 
-#### 8.1. Kylin维度组合模式
-为避免Kylin的Cube维度指数增加，提供了以下几种Cube组合模式对Cube进行降维。
-1. 正常模式（Normal），N个维度构建2的N次方个Cuboid
-2. 维度强制模型（Mandatory），当某个维度（如时间维度）设置为Mandatory模式，Cube的构建只会包含时间维度的Cuboid。
-3. 依赖模式（Hierarchy），给定依赖关系（如省份依赖于国家），Cube的构建只会包含符合该依赖关系的Cuboid
-4. 衍生模式（Derived），指的是一个或多个维度可以由另一个维度生成，设置了衍生关系（如A->B，A->C）时，Cube的构建会包含A而没有B和C
-5. 联合模式（Joint），规定某些维度（如维度A和B）只能同时出现，Cube的构建包含那些AB同时出现的Cuboid或AB同时不出现的Cuboid
-#### 8.1. Cube构建算法
-##### 8.1. .1 逐层构建
+#### 8.1.2 Cube构建算法
+##### 8.1.2.1 逐层构建
 一个N维的Cube由一个N维子立方体、N个（N-1）维子立方体...N个1维子立方体和1个0维子立方体组成，按照逐层算法，每个层级都是按照它上一层级的结果来计算的，如N个（N-1）维的子立方体是由1个N维的子立方体去掉某个维度进行计算的。
-##### 8.1..2 快速Cube算法（逐段算法）
+##### 8.1.2.2 快速Cube算法（逐段算法）
 主要思想为：每个Mapper将所分配到的数据库计算成一个完成的Cube（包含所有Cuboid），每个Mapper将计算完的Cube输出到Reduce合并，生成大Cube。
-#### 8.1. Cube在HBase中的存储
+#### 8.1.3 Cube在HBase中的存储
 每个Cuboid将会存储在HBase中，Cuboid的维度会映射为HBase的Rowkey，Cuboid的指标映射为HBase的Value。
 
 如图所示，原始表中有两个维度，kylin对维度值进行字典编码，拼接在Rowkey的“+”号后方，在“+”号的前方是确定哪些维度被选中
 > ![Image text](./Kylin/CubeHBase.png)  
 > 图片来源于CSDN
-### 8.2 Impala
-### 8.3 Presto
+#### 8.1.4 查询效率优化
+得益于预构建Cube（根据数据量的大小，构建时间从数分钟到数小时不等），Kylin在超大规模数据集上（只要能构建出Cube），都能实现**亚秒级**查询Hive表的能力，为进一步压缩Kylin的查询效率，可通过以下方法进行优化。
+##### 8.1.4.1 Kylin维度组合模式
+可以通过计算当前Cube的大小除以源数据的大小得到Cube的**膨胀率**，当膨胀率大于1000%时，为避免Kylin的Cube维度指数增加，需要考虑以下几种Cube**组合模式**进行降维。  
+1. 正常模式（Normal），N个维度构建2的N次方个Cuboid
+2. 维度强制模型（Mandatory），当某个维度（如时间维度）设置为Mandatory模式，Cube的构建只会包含时间维度的Cuboid。
+3. 依赖模式（Hierarchy），给定依赖关系（如省份依赖于国家），Cube的构建只会包含符合该依赖关系的Cuboid
+4. 衍生模式（Derived），指的是一个或多个维度可以由另一个维度生成，设置了衍生关系（如A->B，A->C）时，Cube的构建会包含A而没有B和C，查询BC时需要将A替换成BC
+5. 联合模式（Joint），规定某些维度（如维度A和B）只能同时出现，Cube的构建包含那些AB同时出现的Cuboid或AB同时不出现的Cuboid
+##### 8.1.4.2 RowKey优化
+由于Kylin将构建好的Cuboid按照Cuboid的维度映射成RowKey存储到HBase中，而HBase的查询效率部分取决于RowKey的设计，通过以下两种方式可提高HBase的查询效率：
+1. 用作Where过滤的维度放在前边，由于HBase根据RowKey进行排序，相同前缀的RowKey按顺序存储，因此被Where过滤的维度放在前面有利于顺序查询
+2. 基数大的放在基数小的前边，在构建Cube的时候，每一级的Cuboid都会由上一级的Cuboid构建而成，Kylin默认使用Cuboid Id较小的进行构建下一级，因此，基数大放在前面有利于加快Cuboid的构建
+##### 8.1.4.3 并发粒度优化
+Kylin提供了三个参数对Cuboid数据在HBase分片的控制，分别是：
+> kylin.hbase.region.cut 
+> kylin.hbase.region.count.min
+> kylin.hbase.region.count.max
+
+**kylin.hbase.region.cut** （默认5GB）参数意味着每个HBase的分区大小是多少，也就是说对于一个大小估计是50GB的Segment，构建引擎会给它分配10个分区，同时**kylin.hbase.region.count.min**和**kylin.hbase.region.count.max**将会决定最后存储在HBase的最少以及最多的分区数。
+#### 8.1.5 增量Cube
+增量与全量Cube的区别：
+1. 全量：每次构建或更新Cube的时候，不会区分历史数据和新加入的数据，意味着构建Cube时，直接导入和处理所有数据
+2. 增量：将Cube划分成多个Segment，每个Segment代表一段时间的Cube预计算结果，更新Cube时，只会计算新一段时间加入的数据
+
+每个Segment将会存储于HBase不同的表，同时，Segment自身具有多个分区，因此，当需要进行查询时，可能会由于不同表以及不同分区的影响，降低查询效率。可采用以下参数配置优化增量Cube：
+1. 自动合并时间阈值，用户可设置多层时间阈值，当满足某一层（从大到小）的时间阈值时，合并成一个Segment
+2. 自动清理时间阈值，当不需要保留超过一定时间的Segment时，可设置自动清理时间阈值，当超过一定时间时，Kylin会自动清理该Segment以减少存储压力
+### 8.2 Presto
+Presto是一个开源的分布式**SQL查询引擎**，支持GB到PB级的数据量，同时具有以下特点：
+1. 基于内存运算，减少不必要的磁盘IO
+2. 支持多个数据源跨表连查，比如从Hive查询访问记录，从Mysql匹配设备信息
+3. 不需要HDFS，可独立部署
+4. 流水线计算作业，达到接近实时查询的要求
+#### 8.2.1 应用场景
+1. 虚拟的统一数据仓库，能够连接多个数据源，在不同数据源上使用相同语法的SQL和SQL Function
+2. ETL工具，连接多个数据源，实现从一个数据源拉取（Exact）、转换（Transform）和加载（Load）到另一个数据源
+3. 加快Hive的查询
+#### 8.2.2 Presto架构
+Presto的架构如图所示，包括一个Coordinator和多个Worker组成：
+> ![Image text](./Presto/PrestoArchitecture.png)  
+> 图片来源于尚硅谷
+### 8.3 Druid
+与Kylin、Presto不同，Apache Druid是一个集时间序列数据库、数据仓库和全文检索系统特点于一体的高性能实时分析型**数据库**，提供OLAP查询能力，并且具有以下特点：
+1. 列式存储，单独存储并压缩每一列数据，查询只查询特定需要查询的数据，支持快速Scan、Ranking和GroupBy
+2. 可拓展，支持数十到数百台服务器集群，支持数百万记录的接收速率，数万亿数据的保存和亚秒到秒级的查询效率
+3. 实时摄取，支持从Kafka和HDFS等数据源实时摄取数据，并对这些数据进行实时查询
+4. 提供近似计算，包括近似count-distinct，近似排序以及近似直方图和分位数计算的算法。这些算法占用有限的内存使用量，通常比精确计算要快得多。
+#### 8.3.1 应用场景
+Druid通常应用于以下场景：
+1. 点击流分析（客户端）
+2. 网络性能检测分析
+3. 服务指标分析
+4. 数字广告分析
+5. OLAP
+#### 8.3.2 Druid架构
+Druid的架构如图所示，包括以下角色节点：
+1. 统治者节点（Overlord），负责接收数据摄取任务，并分配任务到中间管理节点
+2. 中间管理节点（MiddleManagers），负责读取数据并生成Segment数据文件
+3. 协调节点（Coordinator），负责历史节点的负载均衡
+4. 历史节点（Historical），加载已生成的Segment文件，提供数据查询
+5. 查询节点（Broker），接收客户端的查询请求，转发查询请求到中间管理节点和历史节点
+> ![Image text](./Druid/DruidArchitecture.png)  
+> 图片来源于尚硅谷
+#### 8.3.3 Druid存储结构
+Druid的数据被存储在DataSources中，可根据时间或其他属性进行分区，每个区称为一个块（Chunk），同时每个块由数百万条数据的段（Segment）文件组成，如图所示：
+> ![Image text](./Druid/DruidTimeline.png)  
+> 图片来源于Druid官网
+#### 8.3.4 Druid查询优化
+Druid的查询效率高得益于以下技术点：
+1. 数据预聚合，Druid将会把一行数据划分成三个部分：时间戳列、维度列和指标列。当数据录入到系统时，将会先按照全维度聚合要计算的指标，后续的查询都是通过预聚合的中间结果作二次查询
+2. 数据分区以及列式存储，将数据按照时间进行分区（横向切割），同时采用列式存储（纵向切割），可生产一个紧凑且支持快速查询的数据文件，减少全表扫描，加快查询效率
+3. Bitmap索引，为每一行的列取值生成Bitmap集合，例如，第一行和第四行的Gender为Male，生成Bitmap“1001”，第一行和第二行的City为“Beijing”，生成Bitmap为“1100”，当查询Gender=“Male”和City=“Beijing”时，仅需要将Bitmap进行按位与操作就可定位到第二行的数据了
+4. mmap，采用mmap优化读取性能
+5. 查询结果的中间缓存，通过查询节点的缓存优化相同读取请求
+#### 8.3.5 Druid容错
+中间管理节点在处理实时流数据时会定期做checkpoint，但是为了提高写入性能没有采用预写日志（WAL），因此当中间管理节点停机时，可能会造成数据丢失
+#### 8.3.6 Druid近似算法
+1. 采用HyperLogLog的变种算法计算Count Distinct，HyperLogLog算法思想为计算每个数值的Hash的连续前导0来反推出现这样数的概率
+2. 采用近似Top K算法（取分块后的前K个再进行聚合）计算Top K
+### 8.4 三者对比
+| 技术 | 用途 |支持数据源|查询效率|处理模式|
+|:---:|:---:|:---:|:---:|:---:|
+|**Kylin**|实时分析引擎|少|亚秒级|预构建|
+|**Druid**|SQL执行引擎|少|亚秒级到秒级|实时处理|
+|**Presto**|实时数据库|多|秒级|流水线|
+

@@ -761,12 +761,57 @@ Redis是一种NoSQL数据库，与HBase不同，Redis的数据是保存在内存
 ## 7. SQL查询引擎
 介绍三种常用SQL执行引擎，分别适用于离线处理、准实时处理和实时处理
 ### 7.1 Hive SQL
-Hive是基于Hadoop的数仓工具，将SQL转化为MR任务（Spark、Tez），并将数据存储在HDFS上，适合离线批量数据计算和数据分析，即数仓和OLAP
-#### 7.1.1 Hive系统结构
+Hive是基于Hadoop的数仓工具，将SQL转化为MR任务（Spark、Tez），并将数据存储在HDFS上，适合离线批量数据计算和数据分析，即数仓和OLAP。Hive具有以下特点：
+1. 采用Hive QL（HQL）进行查询，支持自定义函数
+2. 容错，底层将数据存储在HDFS，将SQL执行脚本转化为MR并运行在YARN上
+3. 可处理超大规模数据集，同时执行延迟也高，不适合小数据的分析
+4. 适合一次写入多次读取
+#### 7.1.1 应用场景
+1. 日志分析，包括访问记录的PV，UV
+2. 海量结构化数据离线分析
+3. ETL数据清洗
+#### 7.1.2 Hive系统结构
 Hive包含Driver、MetaStore以及执行引擎，Driver负责将SQL解析，进行优化输出为MR、Spark或Tez任务。Metastore负责存储和管理元信息服务，保存了数据库的基本信息和数据库表的定义，一般存储在关系型数据库上（如Mysql），执行引擎包含MR、Spark和Tez，根据采用的框架转化为相应的任务。
 > ![Image text](./Hive/HiveArchitecture.png)  
 > 图片来源于Hortonworks
+#### 7.1.3 Hive数据类型
+Hive底层由Java语言编写，因此提供的数据格式与Java类似，包括：
+1. TINYINT，1字节有符号整数，类似Java的byte
+2. SMALLINT，2字节有符号整数，类似Java的short
+3. INT，4字节有符号整数，类似Java的int
+4. BIGINT，8字节有符号整数，类似Java的long
+5. BOOLEAN，布尔变量，类似Java的boolean
+6. FLOAT，4字节浮点数（单精度），类似Java的float
+7. DOUBLE，8字节浮点数（双精度），类似Java的double
+8. STRING，字符串，类似Java的string
+9. TIMESTAMP，时间戳
+10. BINARY，字节数组
+11. STRUCT，结构体，通过".first .second"访问，类似C语言的struct
+12. MAP，键值对，通过键名进行访问，类似Java的map
+13. ARRAY，数组，通过下标进行访问，类似Java的数组
+#### 7.1.4 分区和分桶
+Hive在逻辑上，分区的表跟没分区的表表现一致，在物理存储上，Hive按照分区列的值将数据存储在表目录下的子目录中，子目录名=“分区键=键值”，键值可以是任意值，同时可以对表的分区进行删除、重命名、清空等操作。  
+Hive的分区包括**单值分区**（**静态分区**、**动态分区**）和**范围分区**，单值分区中根据分区键值的多少建立相应的子文件夹，每个分区键值对应一个子文件夹。其中，在插入Hive表的静态分区时需要明确指定分区键值，而在插入Hive表的动态分区时可以根据子查询的结果由系统进行选择分区。范围分区可以根据分区键值的范围指定分区。  
+Hive分桶指的是根据表的某一列的哈希值分散到多个文件中，这些文件被称为桶，Hive中的一个表可以同时分区分桶，每个分区内都会有N个桶。分桶有利于查询、JOIN以及采样操作。
+#### 7.1.5 存储和压缩格式
+Hive支持**TEXTFILE**（基于行）、**SEQUENCEFILE**（基于行）、**ORC**（基于列）、**PARQUET**（基于列）等文件存储格式。  
+1. TEXTFILE，Hive表默认格式，数据不做压缩，磁盘开销大，可以使用Gzip压缩，但压缩后的文件不支持Split，从而无法并行
+2. SEQUENCEFILE，以KeyValue的形式序列化到文件中，支持三种压缩模式：None、Record、Block，压缩后的文件支持Split，可以并行处理
+3. ORC，根据行组分割整个表，每个行组以按列存储，具有多种压缩方式，具有很高的压缩比，支持Split并可以并行处理，提供多种索引并支持复杂数据结构如（Map）
+4. Parquet，以二进制的方式存储，类似ORC格式，按行分组，每个行组按列存储，支持并行处理
 
+在不压缩的情况下，存储相同文件所需空间大小比较：TEXTFILE>SEQUENCEFILE>PARQUET>ORC，文件的查询速度比较：几种存储格式的查询速度类似。  
+下面是常用的压缩算法对比，其中BZip2和GZip适合于磁盘空间有限以及磁盘IO成为瓶颈时使用，LZO适合于需要读取速度较快时使用，Snappy适合于开启中间数据压缩时使用。
+> ![Image text](./Hive/HiveCompression.png)  
+> 图片来源于CSDN
+#### 7.1.6 Hive排序
+全局排序：采用order by可进行全局排序，但缺点是性能低下，优化方式是采用sort by加order by，先reduce排序，然后再归并排序，加快效率。  
+二次排序：采用distribute by+sort by，distribute by将相同字段的map发送到一个Reduce上执行，sort by再根据排序字段进行排序，如果distribute by和sort by字段一致且需要升序排序，可采用cluster by代替。 
+#### 7.1. 严格模式
+在Hive中，开启严格模式可以帮助用户编写更加高效的SQL，当开启严格模式时：
+1. 对于分区表，只允许执行带有分区过滤字段的SQL语句
+2. order by SQL语句必须带有limit关键词
+3. 不允许出现笛卡尔查询的SQL，可使用join代替
 ### 7.2 Spark SQL
 ### 7.3 Flink SQL
 

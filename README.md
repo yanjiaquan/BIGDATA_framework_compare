@@ -35,46 +35,7 @@
 HDFS的结构是一种主/从模型，有一个主服务器（NameNode）负责该文件系统元数据（每个block占用元数据150字节）的管理以及相应用户的访问。同时，文件的具体数据按照固定大小的块被切分并存储到DataNode上，用户对文件的读写将被DataNode实际处理。
 > ![Image text](HDFS/HDFSArchitecture.png)
 > 图片来源于：Hadoop官网
-#### 1.1.2 心跳机制
-DataNode定期给NameNode发送心跳信息，NameNode接受到来自DataNode的心跳信息或者长时间未接收到心跳信息都会进行处理：
-* **心跳信息处理**  
-  + 判断自身DataNode是否注册，否则在NameNode注册（动态添加）
-  + 更新DataNode的负载信息（更新集群信息）
-  + NameNode生成IO指令，返回给DataNode（响应用户读写操作或系统更新操作）
-* **心跳检查**（长时间未收到心跳信息）
-  + 超时时长公式 `timeout = 2 * heartbeat.recheck.interval + 10 * dfs.heartbeat.interval`，其中，默认的heartbeat.recheck.interval 大小为5分钟，dfs.heartbeat.interval默认为3秒。
-  + 当超过该阈值时长时，DataNode仍然没有发送心跳信息到NameNode，NameNode就会标记该DataNode死亡。
-#### 1.1.3 HDFS副本存放机制（四大机制）
-  * 第一个副本，如果写请求方式是集群中的一个DataNode，直接存放在该节点上，否则在集群中随机选择一个DataNode
-  * 第二个副本，存放于不同于第一个副本所在的机架的DataNode上
-  * 第三个副本，存放于第二个副本所在机架的不同节点上
-  * 如果多余三个副本，随机存放在集群中的各个节点上
-#### 1.1.4 启动过程
-HDFS的启动过程分为四个阶段：
-* 第一阶段：NameNode 读取包含元数据信息的FSImage文件，并加载到内存；
-* 第二阶段：NameNode读取体现HDFS最新状态的EditLog日志文件，并加载到内存中
-* 第三阶段：生成检查点，SecondaryNameNode将EditLog日志中的信息合并到FSImage文件中
-* 第四阶段：进入安全模式，检查数据块的完整性
-#### 1.1.5 检查点机制（四大机制）
-> ![Image text](./HDFS/checkpoint.png)
-> 图片来源Github
-#### 1.1.6 安全模式（四大机制）
-NameNode在启动或客户端设置，会进入安全模式。安全模式用于恢复元数据，即合并FSImage以及EditLog，接受DataNode的心跳信息，构建文件系统抽象目录树关系以及数据块与数据节点之间的关系  
-NameNode在安全模式下，有以下特点：
-1. 不修改系统的命名空间
-2. 不删除或复制块  
-#### 1.1.7 负载均衡（四大机制）
-在集群空闲时进行负载均衡，进行负载均衡的带宽默认1M
-#### 1.1.8 高可用High Available(HA)
-HA的目标是消除单点故障。通过部署多个NameNode进行主备切换来消除单点故障，其中只有一个Active NameNode可以进行EditLog的写，其余Standby NameNode只可以进行读（官网上提供两种实现方式：Journal Node 以及 Network File System(NFS)）。故障转移流程如下图所示：
-> ![Image text](./HDFS/HA.png)
-> 图片来源CSDN  
-
-其中，为了防止脑裂（由于网络原因，出现多个自认为是Master的节点），ZK提供了预防脑裂的方法，隔离（fencing）：
-1. 直接ssh到失效NameNode kill掉程序
-2. 执行自定义脚本
-3. 同一时间，只允许一个NameNode向Journal Node写数据，只允许一个NameNode响应客户端的请求，只允许一个NameNode向DataNode发指令
-#### 1.1.9 HDFS联邦机制
+#### 1.1.2 HDFS联邦机制
 HDFS的1.x版本采用一个NameNode管理命名空间以及数据块信息。这样做的缺点有：
 1. 命名空间跟数据块信息高度耦合
 2. NameNode拓展性受限
@@ -90,6 +51,46 @@ HDFS的2.x版本采用联邦机制，引入块池（block pool）以及命名空
 1. 支持NameNode水平拓展，支持命名空间卷隔离
 2. 多个NameNode提高吞吐量
 3. 高可用性（解决单点故障）
+#### 1.1.3 启动过程
+HDFS的启动过程分为四个阶段：
+* 第一阶段：NameNode 读取包含元数据信息的FSImage文件，并加载到内存；
+* 第二阶段：NameNode读取体现HDFS最新状态的EditLog日志文件，并加载到内存中
+* 第三阶段：生成检查点，SecondaryNameNode将EditLog日志中的信息合并到FSImage文件中
+* 第四阶段：进入安全模式，检查数据块的完整性
+#### 1.1.4 心跳机制（四大机制）
+DataNode定期给NameNode发送心跳信息，NameNode接受到来自DataNode的心跳信息或者长时间未接收到心跳信息都会进行处理：
+* **心跳信息处理**  
+  + 判断自身DataNode是否注册，否则在NameNode注册（动态添加）
+  + 更新DataNode的负载信息（更新集群信息）
+  + NameNode生成IO指令，返回给DataNode（响应用户读写操作或系统更新操作）
+* **心跳检查**（长时间未收到心跳信息）
+  + 超时时长公式 `timeout = 2 * heartbeat.recheck.interval + 10 * dfs.heartbeat.interval`，其中，默认的heartbeat.recheck.interval 大小为5分钟，dfs.heartbeat.interval默认为3秒。
+  + 当超过该阈值时长时，DataNode仍然没有发送心跳信息到NameNode，NameNode就会标记该DataNode死亡。
+#### 1.1.5 检查点机制
+> ![Image text](./HDFS/checkpoint.png)
+> 图片来源Github
+#### 1.1.6 安全模式（四大机制）
+NameNode在启动或客户端设置，会进入安全模式。安全模式用于恢复元数据，即合并FSImage以及EditLog，接受DataNode的心跳信息，构建文件系统抽象目录树关系以及数据块与数据节点之间的关系  
+NameNode在安全模式下，有以下特点：
+1. 不修改系统的命名空间
+2. 不删除或复制块  
+#### 1.1.7 负载均衡（四大机制）
+在集群空闲时进行负载均衡，进行负载均衡的带宽默认1M
+#### 1.1.8 HDFS副本存放机制（四大机制）
+  * 第一个副本，如果写请求方式是集群中的一个DataNode，直接存放在该节点上，否则在集群中随机选择一个DataNode
+  * 第二个副本，存放于不同于第一个副本所在的机架的DataNode上
+  * 第三个副本，存放于第二个副本所在机架的不同节点上
+  * 如果多余三个副本，随机存放在集群中的各个节点上
+#### 1.1.9 高可用High Available(HA)
+HA的目标是消除单点故障。通过部署多个NameNode进行主备切换来消除单点故障，其中只有一个Active NameNode可以进行EditLog的写，其余Standby NameNode只可以进行读（官网上提供两种实现方式：Journal Node 以及 Network File System(NFS)）。故障转移流程如下图所示：
+> ![Image text](./HDFS/HA.png)
+> 图片来源CSDN  
+
+其中，为了防止脑裂（由于网络原因，出现多个自认为是Master的节点），ZK提供了预防脑裂的方法，隔离（fencing）：
+1. 直接ssh到失效NameNode kill掉程序
+2. 执行自定义脚本
+3. 同一时间，只允许一个NameNode向Journal Node写数据，只允许一个NameNode响应客户端的请求，只允许一个NameNode向DataNode发指令
+
 #### 1.1.10 HDFS读写数据流程
 > 读文件流程：
 > ![Image text](./HDFS/HDFSRead.png)
@@ -121,7 +122,10 @@ HDFS的2.x版本采用联邦机制，引入块池（block pool）以及命名空
 四者的关系如图所示：
 > ![Image text](./VFS/VFSObjectRelation.png)   
 > 图片来源CSDN
-#### 1.2.3  VFS所支持的系统调用
+#### 1.2.3 软链接和硬链接
+假如A是B的硬链接，则A的Dentry指向的iNode与B的Dentry指向的iNode是同一块内存地址，删除任意A或者B不会影响剩余目录对该文件的访问，但**不能跨文件系统，不能对目录**进行硬链接。  
+假如A是B的软链接，则A的Dentry指向的iNode与B的Dentry指向的iNode不同，A所存储的数据为B的路径名，通过A所存储的路径可最终找到B文件。
+#### 1.2.4  VFS所支持的系统调用
 | 文件系统相关 | 目录相关 | 链接相关 | 文件相关 |
 | :-----: | :----: | :----: | :----: |
 | mount, umount, umount2, sysfs,  statfs,  fstatfs,  fstatfs64, ustat | chroot，pivot_root，chdir，fchdir，getcwd，mkdir，rmdir，getdents，getdents64，readdir，link，unlink，rename，lookup_dcookie  | readlink，symlink | chown， fchown，lchown，chown16，fchown16，lchown16，hmod，fchmod，utime，stat，fstat，lstat，acess，oldstat，oldfstat，oldlstat，stat64，lstat64，lstat64，open，close，creat，umask，dup，dup2，fcntl， fcntl64，select，poll，truncate，ftruncate，truncate64，ftruncate64，lseek，llseek，read，write，readv，writev，sendfile，sendfile64，readahead |
@@ -409,6 +413,7 @@ DStream提供了窗口操作，即隔一段时间处理一个窗口时间段的�
 > 图片来源Spark官网
 #### 3.1.4 反压机制
 当微批的处理时间大于接受数据的间隔间隔，会导致内存积压最终OOM的情况，在Spark Streaming1.5版本之前可以设置参数spark.streaming.receiver.maxRate限制接受速率，在1.5版本之后Spark Streaming引入了动态反压机制，通过动态控制数据接受速率来适配集群数据处理能力。
+
 ### 3.2 Flink
 Flink是一个分布式处理引擎，支持实时流处理以及批处理，把批处理当做流处理的一个特例（Spark把流处理看作一系列批处理），进行实时流处理时，数据流是无界的，进行批处理时，数据流是有界的。同时，Flink支持Local（调试）、Standalone、YARN以及Kubernetes等多种方式部署。  
 Flink的特点：
@@ -486,6 +491,7 @@ Flink的容错机制是在分布式快照算法Chandy-Lamport的基础上实现�
 Flink的反压机制分为：TaskManager内部的反压以及跨TaskManager的反压  
 TaskManager内部的反压实现原理：Flink使用一个进程管理两个Task，Task之间可通过堆上的阻塞缓冲区进行通信，当任务A的下游任务是任务B，如果任务B的速度比任务A慢，任务B将会在阻塞缓冲区中积累大量数据以至于大小超出限制，不能插入新的数据，导致任务A也得不到空余内存用来处理新的数据，造成任务A的减速。  
 跨TaskMangager的反压实现原理：Flink内部使用Netty发送与接收数据，假设任务B是跨TaskManager的任务A的下游，任务B的速度较慢，分配给Netty的内存（Network Buffer））很快被占满，以至于任务A不能再发送新的数据给任务B，导致任务A所拥有的Network Buffer也占满，造成阻塞
+#### 3.2. CEP
 ### 3.3 Storm
 #### 3.3.1 系统架构
 #### 3.3.2 容错机制
@@ -813,6 +819,11 @@ Hive支持**TEXTFILE**（基于行）、**SEQUENCEFILE**（基于行）、**ORC*
 2. order by SQL语句必须带有limit关键词
 3. 不允许出现笛卡尔查询的SQL，可使用join代替
 ### 7.2 Spark SQL
+Spark SQL是Spark技术生态的重要一员，提供了两个类（DataFrame、DataSet）来简化RDD的开发，提高开发效率。
+#### 7.2.1 DataFrame
+DataFrame是一种以RDD为基础的分布式数据集，与RDD的区别在于，DataFrame带有schema元信息，即每一列的名称和类型。由于新增加的Schema信息，可为DataFrame带来了更多的优化，基于Spark Catalyst优化器，提供如列裁剪，谓词下推，map join等优化。同时，采用code generation ，动态编译表达式，提升性能，比用rdd的自定义函数性能高5倍左右。
+#### 7.2.2 DataSet
+DataSet是DataFrame的拓展，用样例类定义每一行数据的结构信息，既包含RDD能提供的强类型特点，也包含DataFrame的SQL执行优化特点。
 ### 7.3 Flink SQL
 
 ## 8. 即席查询

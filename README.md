@@ -175,15 +175,16 @@ YARN是一种资源管理与调度监控系统，由MapReduce version 1演变而
 YARN中的Container是封装了一定量CPU和内存资源的JAVA对象。
 1. 内存隔离机制 采用额外的监控进程，监控Container的内存使用情况，当超过约定的内存资源量时（考虑了JVM创建子进程内存翻倍的情况），就会被杀死
 2. CPU隔离机制 考虑到不同节点的CPU性能不同，提出虚拟CPU概念，更强计算能力设置更多的虚拟CPU。最终采用Linux所提供的Cgroups进行限制，内存不能用Cgroups限制是因为JVM创建子进程时内存会翻倍出现抖动情况
-#### 2.1.5 负载不均衡问题
-节点任务负载不均衡现象：通过心跳机制领取任务，优先发送心跳的会领取更多的任务。
-为避免上述情况，如果采用公平调度器将yarn.scheduler.fair.max.assign设置为1（默认是-1），如果容量调度器则不能配置。
-但是，一般而言，任务数量远大于节点数量，集群的所有节点都会处于忙碌状态。
-#### 2.1.6 高可用以及任务恢复
+#### 2.1.5 资源分配粒度
+MRv1采用基于槽位的CPU和内存资源分配模型（粗粒度），各个任务之间的申请的资源不共享，造成资源的浪费。  
+YARN的资源调度器采用按不同队列进行粗粒度的资源分配，队列内的作业采用细粒度的分配，同时为每个计算作业设置最小以及最大内存资源限度，当作业申请的内存资源超出限制时，将会被kill。
+#### 2.1.6 高可用以及任务恢复（依靠ZK）
 YARN提供了恢复机制，这使得YARN在服务出现故障和人工重启时，不会对正在运行的应用程序产生任何影响（高可用）。YARN的高可用包括以下三个部分：RM HA、RM重启以及NM重启。
 1. RM HA：采用Active/Standy RM以及ZK主备切换解决单点故障问题，并通过RM重启（第二点）恢复服务
 2. RM重启：RM在运行过程中会将状态存储在ZK中，当发送重启或者故障时，新启动的RM在ZK中重新读取信息，重启后各个NM向其进行注册，返回所管理的容器信息，APPMaster也会重新发送资源请求
 3. 当NM就地重启时，原有运行的Container不会被杀死，而是等新的NM接管并继续运行
+* todo 资源调度源码分析
+* todo 资源隔离源码分析
 * todo 应用场景
 * todo 发展方向
 ### 2.2 Mesos
@@ -197,16 +198,18 @@ Mesos的组成包括Master、Slave、Framework Scheduler以及Framework executor
 > ![Image text](./Mesos/MesosExample.jpg)
 > 图片来源Mesos官网
 
-#### 2.2.2 资源调度器
+#### 2.2.2 资源调度算法
 Mesos的资源调度器采用Dominant Resource Fairness（DRF）算法，该论文是一种针对不同资源类型的max-min fairness算法，核心思想：最大化所有用户中最小的Dominant share，其中，用户的Dominant share是用户最需要资源在集群中所占的份额（如，CPU密集型任务的Dominant share为所分配的CPU占集群总CPU的百分比）。
 > 详情参考论文Dominant Resource Fairness: Fair Allocation of Multiple Resource Types
 
 Mesos支持粗粒度与细粒度资源调度。其中粗粒度指的是，获得资源后就长期持有，直至程序退出才释放资源，细粒度指的是，根据实际需要动态申请资源，任务完成后就释放资源。Mesos在各个Framework之间进行粗粒度的资源分配，每个框架根据自身任务特点进行细粒度的任务调度。相比之下，YARN支持细粒度调度，MRv1支持粗粒度调度。
 #### 2.2.3 资源隔离机制
-Mesos与YARN均支持Cgroups对应用进行容器隔离。
+Mesos采用Cgroups对应用进行资源隔离。
 > Mesos论文在《3.4 隔离》这一章节就写了几行
 #### 2.2.4 高可用
 与YARN一样使用ZK进行容错，细节不再赘述
+* todo 资源调度源码分析
+* todo 资源隔离源码分析
 * todo 应用场景
 * todo 发展方向
 ### 2.3 Borg
@@ -224,7 +227,7 @@ BorgMaster会将提交的Job记录到Paxos中，并分配优先级：生产型�
 可行性检查会找出所有可以安排的节点，打分会为每个任务（task）找出最适合的节点进行执行。打分环节会考虑到：
 1. 销毁最少的任务来执行本任务 
 2. 是否具有任务软件包 
-3. 将高优先级跟低优先级分配到桶一个节点。
+3. 将高优先级跟低优先级分配到同一个节点。
 
 为了避免抢占洪流，Borg只允许生产型作业抢占非生产型作业。由于Borg允许抢占式执行，解决了饥饿问题，即当节点A有10G内存，同时被一个长期运行的任务B占用4G内存，任务C所需求的10G内存永远不能满足，使得任务C饥饿。YARN、Mesos不能解决饥饿问题。
 #### 2.3.3 资源隔离机制
@@ -234,18 +237,22 @@ BorgMaster会将提交的Job记录到Paxos中，并分配优先级：生产型�
 2. 大处理单元（Large Cell）：处理单元越大越好
 3. 细粒度资源请求（Fine-Grained Resource）：细粒度的资源请求有利于资源回收
 4. 资源超售（Resource Reclamation）：为避免用户为任务预留过多的资源，采用资源回收的方式将该任务的预留资源逐渐回收。
-> ![Image text](./Borg/ResourceReclamation.png)
+> ![Image text](./Borg/ResourceReclamation.png)  
 > 图片来源于CSDN
+* todo 资源调度源码分析
+* todo 资源隔离源码分析
 * todo 应用场景
 * todo 发展方向
 ### 2.4 Kubernetes
-Kubernetes是一个开源的容器编排管理平台，简称k8s，管理集群上容器化的应用程序，可实现服务注册、发现以及四层或七层负载均衡等功能。
+Kubernetes是一个开源的容器编排管理平台，简称k8s，管理集群上容器化的应用程序，可实现服务注册、发现以及四层或七层负载均衡等功能。目前支持数千节点的集群。
 #### 2.4.1 系统结构
 k8s集群由一组运行容器化应用程序的节点组成，主要角色包括管理者k8sMaster以及在Node上运行的kubelet，其中kubelet负责接收Master的指令和维护Pod状态，Master负责对外提供服务以及给kubelet发出指令。一个Pod代表一组容器和卷，共享一个网络命名空间，因此一个Pod内的容器可以通过localhost进行通信，不同pod之间通过Label、内置的DNS-server和kube-proxy进行通信。
 > ![Image text](./k8s/k8sArchitecture.png)
 > 图片来源dockone.io
 * todo 资源调度
 * todo 负载均衡
+* todo 资源调度源码分析
+* todo 资源隔离源码分析
 * todo 服务发现与注册
 * todo 资源隔离
 * todo 应用场景
@@ -256,7 +263,7 @@ k8s集群由一组运行容器化应用程序的节点组成，主要角色包�
 |**YARN**|资源管理与任务调度和监控|容量调度器|Cgroups+进程监控|ZK|心跳机制|数万|
 |**Mesos**|资源管理|DRF算法|Cgroups|ZK|心跳机制|数万|
 |**Borg**|资源管理与任务调度和监控|打分机制|Cgroups|Paxos选举|主动Poll|数万|
-|**k8s**|容器编排|打分机制|Cgroups|etcd+HA Proxy|心跳机制|数千|
+|**k8s**|容器编排|打分机制|Cgroups+namespace|etcd+HA Proxy|心跳机制|数千|
 
 ## 2. 离线计算范式
 离线计算指的是批处理计算，如离线报表、数据分析等应用，离线计算相对于在线计算有以下特点：
@@ -278,25 +285,20 @@ Reduce任务的流程图如图所示：
 > 图片来源Github
 
 重点流程：Reduce任务通过网络向Map任务的输出文件获取对应分区的数据，并调用reduce()方法，最终调用OutputFormat.RecordWriter的write方法将结果写入到HDFS或其他数仓中。
-#### 2.1.3 Hadoop实现的输入格式
-InputFormat的实现类包括：TextInputFormat、KeyValueTextInputFormat以及SequenceFileInputFormat
-1. TextInputFormat：默认读取方式，Value是一行数据
-2. KeyValueTextInputFormat：每一行都是键值对，用制表符隔开
-3. SequenceFileInputFormat：二进制的键值对，键值对都是可序列化的
 
-#### 2.1.4 环形缓冲区底层
+#### 2.1.3 环形缓冲区底层
 采用字节数组实现，前半部分记录KV索引位置，后半部分记录KV数据。读写过程采用单生产者消费者模式。如图所示：
 > ![Image text](./MapReduce/RingBuffer.png)
 > 图片来源CSDN
-#### 2.1.5 Shuffle的缺陷
+#### 2.1.4 Shuffle的缺陷
 * 磁盘IO问题：每个Map都会有多个溢写文件写入到磁盘
 * 网络IO问题：当数据量较少，但Map和Reduce任务很多时，会产生较多网络IO
-#### 2.1.6 全排序
+#### 2.1.5 全排序
 在MR中实现全局排序有以下三种方法：
 1. 设置一个Reduce方法，所有Map方法得到的结果都会发送到Reduce并进行排序
-2. 自定义分区函数的分界点，按照排序的Key进行分区，分区之间有序，分区内部有序，从而全局有序（会出现数据倾斜的问题）
+2. 自定义分区函数的分界点，按照排序的Key进行分区，分区之间有序，分区内部有序，从而全局有序（但会出现数据倾斜的问题）
 3. 基于数据采样的全局排序，对待排序数据进行抽样（分片采样，随机采样，间隔采样），产生分割点，按照第二种方式排序。
-#### 2.1.7 辅助排序（二次排序）
+#### 2.1.6 辅助排序（二次排序）
 自定义组合键，在Map方法中将键值对的键改为键值的组合键，然后自定义分区函数以及排序函数（Comparator），在Shuffle中完成键的排序以及值的排序。（MR默认会在Shuffle对键进行排序）。
 ### 2.2 Spark
 Spark是加州大学伯克利分校（UC Berkeley）开源的基于内存的通用并行框架。相比于MapReduce，Spark将数据缓存在内存中，减少了多余的IO消耗，直到计算得到最后的结果再将结果写入磁盘中。  
@@ -319,11 +321,11 @@ Spark集群存在以下角色：DAGScheduler、TaskScheduler以及Executor。Spa
 1. Local模式，用来调试代码
 2. Standalone模式，独立部署模式，Spark自带的集群部署模式，不依赖于其他资源管理系统独立运行Spark分布式程序
 3. YARN模式，将Spark任务交给YARN调度
-4. Mesos模式，将Mesos交给Mesos调度，Mesos支持粗粒度以及细粒度调度（参考第一章）
+4. Mesos模式，将Spark任务交给Mesos调度，Mesos支持粗粒度以及细粒度调度（参考第一章）
 #### 2.2.2 RDD算子
 RDD的基本算子包括三种：转化算子（Transformation）、行动算子（Action）、控制算子（Controller）。
 1. 转化算子：包括map、filter、flatMap、sample、groupByKey，将一个RDD转化为新的RDD
-2. 行动算子：包括count、coect、reduce、save，将一个RDD转化为Scala基本类型
+2. 行动算子：包括count、collect、reduce、save，将一个RDD转化为Scala基本类型
 3. 控制算子：包括cache、persis指令，将RDD在内存或硬盘中进行缓存
 #### 2.2.3 容错机制
 不同于MapReduce将容错交给YARN处理，Spark针对三大层面（调度层、任务层、节点层），RDD容错有以下处理方法：
@@ -333,11 +335,12 @@ RDD的基本算子包括三种：转化算子（Transformation）、行动算子
 #### 2.2.4 Shuffle
 与MR类似，Spark的两个Stage之间通过Shuffle进行连接，前一个Stage的最后一个RDD作为Map任务，后一个Stage的第一个RDD作为Reduce任务。
 Spark的Shuffle实现方式包括Hash Based Shuffle（弃用）和Sort Based Shuffle，其中Hash Based Shuffle会产生多个临时文件并影响性能，在Spark1.2及后续版本中已经弃用。    
-当分区数较少时（小于200）并且Map任务没有聚合操作，会采用BypassMergeSortShuffleWriter（没有排序，最终合并成一个文件）进行溢写磁盘，当分区数少于16777216并且没有Map端聚合操作时，采用UnsafeShuffleWriter（分区内有序）进行溢写磁盘，其他情况采用SortShuffleWriter（全局有序）进行溢写。
+当分区数较少时（小于200）并且Map任务没有聚合操作（没有aggregator），会采用BypassMergeSortShuffleWriter（没有排序，最终合并成一个文件）进行溢写磁盘，当分区数少于16777216并且没有Map端聚合操作时，采用UnsafeShuffleWriter（分区内有序，由于没有序列化，不支持Aggregator）进行溢写磁盘，其他情况采用SortShuffleWriter（全局有序）进行溢写。
 相比于MR的Shuffle做出的优化：
-1. 对分区数少并且没有聚合类shuffle算子（reduceByKey）不进行排序，提高了性能。
-2. 采用AppendOnlyMap/ExternalAppendOnlyMap减少了内存使用量
+1. 对分区数少并且没有聚合类shuffle算子（reduceByKey）不进行排序，提高了性能
+2. 采用AppendOnlyMap/ExternalAppendOnlyMap（二分探测法实现的Map）做缓存，减少磁盘IO
 3. 对于Shuffle read的文件为本地文件，MR采用网络下载数据，Spark直接读取本地文件
+#### todo shuffle源码分析
 #### 2.2.5 内存结构
 Spark运行在JVM上，因此Spark包含由JVM管理的堆内内存以及通过JDK Unsafe操作的堆外内存，其中Spark程序中一般对象所占用的内存为堆内内存，堆外内存用作提高Shuffle时排序的效率。  
 Spark的内存分配经过1. 静态内存管理机制 2. 统一内存管理机制。其中1.静态内存管理的堆内分配如图所示：
@@ -362,6 +365,7 @@ Spark的内存分配经过1. 静态内存管理机制 2. 统一内存管理机�
 > 图片来源尚硅谷
 
 当双方空间都不足时，存储到硬盘，当一方空间不足而对方空余可借用部分空间。当执行内存的空间被占用时，可让存储内存占用的部分转存到硬盘，归还借用的空间。但存储内存的空间被占用后，不能让执行内存归还。
+#### todo 内存结构实现源码
 #### 2.2.6 数据倾斜
 当其中一个任务计算量特别大而其他任务相对少时，就发生了***数据倾斜***现象，计算量大的计算任务所需要的时间久，而计算量少的任务需要时间短，而Spark每个Stage完成时间取决于完成时间最久的子任务。因此，解决数据倾斜问题对Spark任务效率有显著提升。  
 解决方法可参考以下方案：
@@ -413,7 +417,11 @@ DStream提供了窗口操作，即隔一段时间处理一个窗口时间段的�
 > 图片来源Spark官网
 #### 3.1.4 反压机制
 当微批的处理时间大于接受数据的间隔间隔，会导致内存积压最终OOM的情况，在Spark Streaming1.5版本之前可以设置参数spark.streaming.receiver.maxRate限制接受速率，在1.5版本之后Spark Streaming引入了动态反压机制，通过动态控制数据接受速率来适配集群数据处理能力。
-
+#### 3.1.5 exactly-once语义
+当系统集成使用Kafka、Spark Streaming和HDFS时并希望得到Exactly Once语义时，需要保证输入、处理和输出都为Exactly Once特性。  
+由于RDD容错、不可变和计算确定的特性，Spark Streaming在处理时可以获得Exactly Once的语义，如果接入Kafka的Direct API，即可保证，输入也是Exactly Once。当Spark Streaming输出时，一般采用foreachRDD的方式调用，但该方法失败时会重复调用，直到成功为止。为了实现输出过程的Exactly Once语义，需要添加（1）幂等性写入或（2）事务性写入。
+1. 幂等性写入：适用于带有主键且仅适用Map-Only算子的数据，由于自带主键，当重复写入多条时也不会产生多个相同结果
+2. 事务性写入：需要手动产生一个唯一ID，可以包括分区号、Kafka偏移量，之后利用**事务**将处理结果和ID一同写入数据库（失败时自动回滚）
 ### 3.2 Flink
 Flink是一个分布式处理引擎，支持实时流处理以及批处理，把批处理当做流处理的一个特例（Spark把流处理看作一系列批处理），进行实时流处理时，数据流是无界的，进行批处理时，数据流是有界的。同时，Flink支持Local（调试）、Standalone、YARN以及Kubernetes等多种方式部署。  
 Flink的特点：

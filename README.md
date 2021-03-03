@@ -236,15 +236,45 @@ BorgMaster会将提交的Job记录到Paxos中，并分配优先级：生产型�
 * todo 发展方向
 ### 2.4 Kubernetes
 Kubernetes是一个开源的容器编排管理平台，简称k8s，管理集群上容器化的应用程序，可实现服务注册、发现以及四层或七层负载均衡等功能。
+
+容器化的部署方式优点是容器之间互相隔离，与底层设施、操作系统解耦（每个容器具有自己的底层操作库），方便独立地管理容器的生命周期包括升级更新/回滚等操作
+
+Kubernetes的**应用场景**包括：
+多个进程（作为容器运行）协同工作。（Pod）  
+存储系统挂载  
+Distributing secrets  
+应用健康检测  
+应用实例的复制  
+Pod自动伸缩/扩展  
+命名和发现服务  
+负载均衡  
+滚动更新  
+资源监控  
+日志访问  
+调试应用程序  
+提供认证和授权
 #### 2.4.1 系统结构
 k8s集群由一组运行容器化应用程序的节点组成，主要角色包括管理者k8sMaster以及在Node上运行的kubelet，其中kubelet负责接收Master的指令和维护Pod状态，Master负责对外提供服务以及给kubelet发出指令。一个Pod代表一组容器和卷，共享一个网络命名空间，因此一个Pod内的容器可以通过localhost进行通信，不同pod之间通过Label、内置的DNS-server和kube-proxy进行通信。
 > ![Image text](./k8s/k8sArchitecture.png)
 > 图片来源dockone.io
-* todo 资源调度
-* todo 负载均衡
+#### 2.4.2 资源调度
+类似Borg，在Node上创建Pod主要包括两个阶段：
+1. 预选过程，选择满足Pod所需资源的Node
+2. 优选过程，对节点进行打分，考虑最低负载的Node以及是否具有所需的镜像文件等。
+#### 2.4.3 负载均衡
+k8s的四层和七层负载均衡分别由Kube-proxy和ingress实现。  
+Kube-proxy包括三种代理模式：
+1. userspace模式，多次从用户空间到内核空间带来大量性能损耗
+2. iptables模式，克服了userspace模式的损耗，但需要遍历iptables列表，时间复杂度O(n)
+3. ipvs模式，克服iptables的列表存储改用hashtable，时间复杂度O(1)
+
+Ingress是k8s的一种资源对象，允许外部访问k8s腹部，通过创建规则配置访问权限，仅支持HTTP和HTTPS，Ingress的工作原理：把修改Ingress对象转化成Nginx的配置，然后对外部提供服务。
+
+> ![Image text](./k8s/Ingress.png)
+> 图片来源CSDN
+
 * todo 服务发现与注册
 * todo 资源隔离
-* todo 应用场景
 * todo 发展方向
 ### 2.5 四种资源管理系统对比
 | 技术 | 用途 |资源调度器|隔离机制|高可用|通信机制|支持节点数|

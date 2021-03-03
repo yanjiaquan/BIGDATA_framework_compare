@@ -35,46 +35,7 @@
 HDFS的结构是一种主/从模型，有一个主服务器（NameNode）负责该文件系统元数据（每个block占用元数据150字节）的管理以及相应用户的访问。同时，文件的具体数据按照固定大小的块被切分并存储到DataNode上，用户对文件的读写将被DataNode实际处理。
 > ![Image text](HDFS/HDFSArchitecture.png)
 > 图片来源于：Hadoop官网
-#### 1.1.2 心跳机制
-DataNode定期给NameNode发送心跳信息，NameNode接受到来自DataNode的心跳信息或者长时间未接收到心跳信息都会进行处理：
-* **心跳信息处理**  
-  + 判断自身DataNode是否注册，否则在NameNode注册（动态添加）
-  + 更新DataNode的负载信息（更新集群信息）
-  + NameNode生成IO指令，返回给DataNode（响应用户读写操作或系统更新操作）
-* **心跳检查**（长时间未收到心跳信息）
-  + 超时时长公式 `timeout = 2 * heartbeat.recheck.interval + 10 * dfs.heartbeat.interval`，其中，默认的heartbeat.recheck.interval 大小为5分钟，dfs.heartbeat.interval默认为3秒。
-  + 当超过该阈值时长时，DataNode仍然没有发送心跳信息到NameNode，NameNode就会标记该DataNode死亡。
-#### 1.1.3 HDFS副本存放机制（四大机制）
-  * 第一个副本，如果写请求方式是集群中的一个DataNode，直接存放在该节点上，否则在集群中随机选择一个DataNode
-  * 第二个副本，存放于不同于第一个副本所在的机架的DataNode上
-  * 第三个副本，存放于第二个副本所在机架的不同节点上
-  * 如果多余三个副本，随机存放在集群中的各个节点上
-#### 1.1.4 启动过程
-HDFS的启动过程分为四个阶段：
-* 第一阶段：NameNode 读取包含元数据信息的FSImage文件，并加载到内存；
-* 第二阶段：NameNode读取体现HDFS最新状态的EditLog日志文件，并加载到内存中
-* 第三阶段：生成检查点，SecondaryNameNode将EditLog日志中的信息合并到FSImage文件中
-* 第四阶段：进入安全模式，检查数据块的完整性
-#### 1.1.5 检查点机制（四大机制）
-> ![Image text](./HDFS/checkpoint.png)
-> 图片来源Github
-#### 1.1.6 安全模式（四大机制）
-NameNode在启动或客户端设置，会进入安全模式。安全模式用于恢复元数据，即合并FSImage以及EditLog，接受DataNode的心跳信息，构建文件系统抽象目录树关系以及数据块与数据节点之间的关系  
-NameNode在安全模式下，有以下特点：
-1. 不修改系统的命名空间
-2. 不删除或复制块  
-#### 1.1.7 负载均衡（四大机制）
-在集群空闲时进行负载均衡，进行负载均衡的带宽默认1M
-#### 1.1.8 高可用High Available(HA)
-HA的目标是消除单点故障。通过部署多个NameNode进行主备切换来消除单点故障，其中只有一个Active NameNode可以进行EditLog的写，其余Standby NameNode只可以进行读（官网上提供两种实现方式：Journal Node 以及 Network File System(NFS)）。故障转移流程如下图所示：
-> ![Image text](./HDFS/HA.png)
-> 图片来源CSDN  
-
-其中，为了防止脑裂（由于网络原因，出现多个自认为是Master的节点），ZK提供了预防脑裂的方法，隔离（fencing）：
-1. 直接ssh到失效NameNode kill掉程序
-2. 执行自定义脚本
-3. 同一时间，只允许一个NameNode向Journal Node写数据，只允许一个NameNode响应客户端的请求，只允许一个NameNode向DataNode发指令
-#### 1.1.9 HDFS联邦机制
+#### 1.1.2 HDFS联邦机制
 HDFS的1.x版本采用一个NameNode管理命名空间以及数据块信息。这样做的缺点有：
 1. 命名空间跟数据块信息高度耦合
 2. NameNode拓展性受限
@@ -90,6 +51,46 @@ HDFS的2.x版本采用联邦机制，引入块池（block pool）以及命名空
 1. 支持NameNode水平拓展，支持命名空间卷隔离
 2. 多个NameNode提高吞吐量
 3. 高可用性（解决单点故障）
+#### 1.1.3 启动过程
+HDFS的启动过程分为四个阶段：
+* 第一阶段：NameNode 读取包含元数据信息的FSImage文件，并加载到内存；
+* 第二阶段：NameNode读取体现HDFS最新状态的EditLog日志文件，并加载到内存中
+* 第三阶段：生成检查点，SecondaryNameNode将EditLog日志中的信息合并到FSImage文件中
+* 第四阶段：进入安全模式，检查数据块的完整性
+#### 1.1.4 心跳机制（四大机制）
+DataNode定期给NameNode发送心跳信息，NameNode接受到来自DataNode的心跳信息或者长时间未接收到心跳信息都会进行处理：
+* **心跳信息处理**  
+  + 判断自身DataNode是否注册，否则在NameNode注册（动态添加）
+  + 更新DataNode的负载信息（更新集群信息）
+  + NameNode生成IO指令，返回给DataNode（响应用户读写操作或系统更新操作）
+* **心跳检查**（长时间未收到心跳信息）
+  + 超时时长公式 `timeout = 2 * heartbeat.recheck.interval + 10 * dfs.heartbeat.interval`，其中，默认的heartbeat.recheck.interval 大小为5分钟，dfs.heartbeat.interval默认为3秒。
+  + 当超过该阈值时长时，DataNode仍然没有发送心跳信息到NameNode，NameNode就会标记该DataNode死亡。
+#### 1.1.5 检查点机制
+> ![Image text](./HDFS/checkpoint.png)
+> 图片来源Github
+#### 1.1.6 安全模式（四大机制）
+NameNode在启动或客户端设置，会进入安全模式。安全模式用于恢复元数据，即合并FSImage以及EditLog，接受DataNode的心跳信息，构建文件系统抽象目录树关系以及数据块与数据节点之间的关系  
+NameNode在安全模式下，有以下特点：
+1. 不修改系统的命名空间
+2. 不删除或复制块  
+#### 1.1.7 负载均衡（四大机制）
+在集群空闲时进行负载均衡，进行负载均衡的带宽默认1M
+#### 1.1.8 HDFS副本存放机制（四大机制）
+  * 第一个副本，如果写请求方式是集群中的一个DataNode，直接存放在该节点上，否则在集群中随机选择一个DataNode
+  * 第二个副本，存放于不同于第一个副本所在的机架的DataNode上
+  * 第三个副本，存放于第二个副本所在机架的不同节点上
+  * 如果多余三个副本，随机存放在集群中的各个节点上
+#### 1.1.9 高可用High Available(HA)
+HA的目标是消除单点故障。通过部署多个NameNode进行主备切换来消除单点故障，其中只有一个Active NameNode可以进行EditLog的写，其余Standby NameNode只可以进行读（官网上提供两种实现方式：Journal Node 以及 Network File System(NFS)）。故障转移流程如下图所示：
+> ![Image text](./HDFS/HA.png)
+> 图片来源CSDN  
+
+其中，为了防止脑裂（由于网络原因，出现多个自认为是Master的节点），ZK提供了预防脑裂的方法，隔离（fencing）：
+1. 直接ssh到失效NameNode kill掉程序
+2. 执行自定义脚本
+3. 同一时间，只允许一个NameNode向Journal Node写数据，只允许一个NameNode响应客户端的请求，只允许一个NameNode向DataNode发指令
+
 #### 1.1.10 HDFS读写数据流程
 > 读文件流程：
 > ![Image text](./HDFS/HDFSRead.png)
@@ -121,7 +122,10 @@ HDFS的2.x版本采用联邦机制，引入块池（block pool）以及命名空
 四者的关系如图所示：
 > ![Image text](./VFS/VFSObjectRelation.png)   
 > 图片来源CSDN
-#### 1.2.3  VFS所支持的系统调用
+#### 1.2.3 软链接和硬链接
+假如A是B的硬链接，则A的Dentry指向的iNode与B的Dentry指向的iNode是同一块内存地址，删除任意A或者B不会影响剩余目录对该文件的访问，但**不能跨文件系统，不能对目录**进行硬链接。  
+假如A是B的软链接，则A的Dentry指向的iNode与B的Dentry指向的iNode不同，A所存储的数据为B的路径名，通过A所存储的路径可最终找到B文件。
+#### 1.2.4  VFS所支持的系统调用
 | 文件系统相关 | 目录相关 | 链接相关 | 文件相关 |
 | :-----: | :----: | :----: | :----: |
 | mount, umount, umount2, sysfs,  statfs,  fstatfs,  fstatfs64, ustat | chroot，pivot_root，chdir，fchdir，getcwd，mkdir，rmdir，getdents，getdents64，readdir，link，unlink，rename，lookup_dcookie  | readlink，symlink | chown， fchown，lchown，chown16，fchown16，lchown16，hmod，fchmod，utime，stat，fstat，lstat，acess，oldstat，oldfstat，oldlstat，stat64，lstat64，lstat64，open，close，creat，umask，dup，dup2，fcntl， fcntl64，select，poll，truncate，ftruncate，truncate64，ftruncate64，lseek，llseek，read，write，readv，writev，sendfile，sendfile64，readahead |
@@ -171,15 +175,16 @@ YARN是一种资源管理与调度监控系统，由MapReduce version 1演变而
 YARN中的Container是封装了一定量CPU和内存资源的JAVA对象。
 1. 内存隔离机制 采用额外的监控进程，监控Container的内存使用情况，当超过约定的内存资源量时（考虑了JVM创建子进程内存翻倍的情况），就会被杀死
 2. CPU隔离机制 考虑到不同节点的CPU性能不同，提出虚拟CPU概念，更强计算能力设置更多的虚拟CPU。最终采用Linux所提供的Cgroups进行限制，内存不能用Cgroups限制是因为JVM创建子进程时内存会翻倍出现抖动情况
-#### 2.1.5 负载不均衡问题
-节点任务负载不均衡现象：通过心跳机制领取任务，优先发送心跳的会领取更多的任务。
-为避免上述情况，如果采用公平调度器将yarn.scheduler.fair.max.assign设置为1（默认是-1），如果容量调度器则不能配置。
-但是，一般而言，任务数量远大于节点数量，集群的所有节点都会处于忙碌状态。
-#### 2.1.6 高可用以及任务恢复
+#### 2.1.5 资源分配粒度
+MRv1采用基于槽位的CPU和内存资源分配模型（粗粒度），各个任务之间的申请的资源不共享，造成资源的浪费。  
+YARN的资源调度器采用按不同队列进行粗粒度的资源分配，队列内的作业采用细粒度的分配，同时为每个计算作业设置最小以及最大内存资源限度，当作业申请的内存资源超出限制时，将会被kill。
+#### 2.1.6 高可用以及任务恢复（依靠ZK）
 YARN提供了恢复机制，这使得YARN在服务出现故障和人工重启时，不会对正在运行的应用程序产生任何影响（高可用）。YARN的高可用包括以下三个部分：RM HA、RM重启以及NM重启。
 1. RM HA：采用Active/Standy RM以及ZK主备切换解决单点故障问题，并通过RM重启（第二点）恢复服务
 2. RM重启：RM在运行过程中会将状态存储在ZK中，当发送重启或者故障时，新启动的RM在ZK中重新读取信息，重启后各个NM向其进行注册，返回所管理的容器信息，APPMaster也会重新发送资源请求
 3. 当NM就地重启时，原有运行的Container不会被杀死，而是等新的NM接管并继续运行
+* todo 资源调度源码分析
+* todo 资源隔离源码分析
 * todo 应用场景
 * todo 发展方向
 ### 2.2 Mesos
@@ -193,16 +198,18 @@ Mesos的组成包括Master、Slave、Framework Scheduler以及Framework executor
 > ![Image text](./Mesos/MesosExample.jpg)
 > 图片来源Mesos官网
 
-#### 2.2.2 资源调度器
+#### 2.2.2 资源调度算法
 Mesos的资源调度器采用Dominant Resource Fairness（DRF）算法，该论文是一种针对不同资源类型的max-min fairness算法，核心思想：最大化所有用户中最小的Dominant share，其中，用户的Dominant share是用户最需要资源在集群中所占的份额（如，CPU密集型任务的Dominant share为所分配的CPU占集群总CPU的百分比）。
 > 详情参考论文Dominant Resource Fairness: Fair Allocation of Multiple Resource Types
 
 Mesos支持粗粒度与细粒度资源调度。其中粗粒度指的是，获得资源后就长期持有，直至程序退出才释放资源，细粒度指的是，根据实际需要动态申请资源，任务完成后就释放资源。Mesos在各个Framework之间进行粗粒度的资源分配，每个框架根据自身任务特点进行细粒度的任务调度。相比之下，YARN支持细粒度调度，MRv1支持粗粒度调度。
 #### 2.2.3 资源隔离机制
-Mesos与YARN均支持Cgroups对应用进行容器隔离。
+Mesos采用Cgroups对应用进行资源隔离。
 > Mesos论文在《3.4 隔离》这一章节就写了几行
 #### 2.2.4 高可用
 与YARN一样使用ZK进行容错，细节不再赘述
+* todo 资源调度源码分析
+* todo 资源隔离源码分析
 * todo 应用场景
 * todo 发展方向
 ### 2.3 Borg
@@ -220,7 +227,7 @@ BorgMaster会将提交的Job记录到Paxos中，并分配优先级：生产型�
 可行性检查会找出所有可以安排的节点，打分会为每个任务（task）找出最适合的节点进行执行。打分环节会考虑到：
 1. 销毁最少的任务来执行本任务 
 2. 是否具有任务软件包 
-3. 将高优先级跟低优先级分配到桶一个节点。
+3. 将高优先级跟低优先级分配到同一个节点。
 
 为了避免抢占洪流，Borg只允许生产型作业抢占非生产型作业。由于Borg允许抢占式执行，解决了饥饿问题，即当节点A有10G内存，同时被一个长期运行的任务B占用4G内存，任务C所需求的10G内存永远不能满足，使得任务C饥饿。YARN、Mesos不能解决饥饿问题。
 #### 2.3.3 资源隔离机制
@@ -230,8 +237,10 @@ BorgMaster会将提交的Job记录到Paxos中，并分配优先级：生产型�
 2. 大处理单元（Large Cell）：处理单元越大越好
 3. 细粒度资源请求（Fine-Grained Resource）：细粒度的资源请求有利于资源回收
 4. 资源超售（Resource Reclamation）：为避免用户为任务预留过多的资源，采用资源回收的方式将该任务的预留资源逐渐回收。
-> ![Image text](./Borg/ResourceReclamation.png)
+> ![Image text](./Borg/ResourceReclamation.png)  
 > 图片来源于CSDN
+* todo 资源调度源码分析
+* todo 资源隔离源码分析
 * todo 应用场景
 * todo 发展方向
 ### 2.4 Kubernetes
@@ -275,6 +284,7 @@ Ingress是k8s的一种资源对象，允许外部访问k8s腹部，通过创建�
 
 * todo 服务发现与注册
 * todo 资源隔离
+* todo 应用场景
 * todo 发展方向
 ### 2.5 四种资源管理系统对比
 | 技术 | 用途 |资源调度器|隔离机制|高可用|通信机制|支持节点数|
@@ -282,7 +292,7 @@ Ingress是k8s的一种资源对象，允许外部访问k8s腹部，通过创建�
 |**YARN**|资源管理与任务调度和监控|容量调度器|Cgroups+进程监控|ZK|心跳机制|数万|
 |**Mesos**|资源管理|DRF算法|Cgroups|ZK|心跳机制|数万|
 |**Borg**|资源管理与任务调度和监控|打分机制|Cgroups|Paxos选举|主动Poll|数万|
-|**k8s**|容器编排|打分机制|Cgroups|etcd+HA Proxy|心跳机制|数千|
+|**k8s**|容器编排|打分机制|Cgroups+namespace|etcd+HA Proxy|心跳机制|数千|
 
 ## 2. 离线计算范式
 离线计算指的是批处理计算，如离线报表、数据分析等应用，离线计算相对于在线计算有以下特点：
@@ -304,25 +314,20 @@ Reduce任务的流程图如图所示：
 > 图片来源Github
 
 重点流程：Reduce任务通过网络向Map任务的输出文件获取对应分区的数据，并调用reduce()方法，最终调用OutputFormat.RecordWriter的write方法将结果写入到HDFS或其他数仓中。
-#### 2.1.3 Hadoop实现的输入格式
-InputFormat的实现类包括：TextInputFormat、KeyValueTextInputFormat以及SequenceFileInputFormat
-1. TextInputFormat：默认读取方式，Value是一行数据
-2. KeyValueTextInputFormat：每一行都是键值对，用制表符隔开
-3. SequenceFileInputFormat：二进制的键值对，键值对都是可序列化的
 
-#### 2.1.4 环形缓冲区底层
+#### 2.1.3 环形缓冲区底层
 采用字节数组实现，前半部分记录KV索引位置，后半部分记录KV数据。读写过程采用单生产者消费者模式。如图所示：
 > ![Image text](./MapReduce/RingBuffer.png)
 > 图片来源CSDN
-#### 2.1.5 Shuffle的缺陷
+#### 2.1.4 Shuffle的缺陷
 * 磁盘IO问题：每个Map都会有多个溢写文件写入到磁盘
 * 网络IO问题：当数据量较少，但Map和Reduce任务很多时，会产生较多网络IO
-#### 2.1.6 全排序
+#### 2.1.5 全排序
 在MR中实现全局排序有以下三种方法：
 1. 设置一个Reduce方法，所有Map方法得到的结果都会发送到Reduce并进行排序
-2. 自定义分区函数的分界点，按照排序的Key进行分区，分区之间有序，分区内部有序，从而全局有序（会出现数据倾斜的问题）
+2. 自定义分区函数的分界点，按照排序的Key进行分区，分区之间有序，分区内部有序，从而全局有序（但会出现数据倾斜的问题）
 3. 基于数据采样的全局排序，对待排序数据进行抽样（分片采样，随机采样，间隔采样），产生分割点，按照第二种方式排序。
-#### 2.1.7 辅助排序（二次排序）
+#### 2.1.6 辅助排序（二次排序）
 自定义组合键，在Map方法中将键值对的键改为键值的组合键，然后自定义分区函数以及排序函数（Comparator），在Shuffle中完成键的排序以及值的排序。（MR默认会在Shuffle对键进行排序）。
 ### 2.2 Spark
 Spark是加州大学伯克利分校（UC Berkeley）开源的基于内存的通用并行框架。相比于MapReduce，Spark将数据缓存在内存中，减少了多余的IO消耗，直到计算得到最后的结果再将结果写入磁盘中。  
@@ -345,11 +350,11 @@ Spark集群存在以下角色：DAGScheduler、TaskScheduler以及Executor。Spa
 1. Local模式，用来调试代码
 2. Standalone模式，独立部署模式，Spark自带的集群部署模式，不依赖于其他资源管理系统独立运行Spark分布式程序
 3. YARN模式，将Spark任务交给YARN调度
-4. Mesos模式，将Mesos交给Mesos调度，Mesos支持粗粒度以及细粒度调度（参考第一章）
+4. Mesos模式，将Spark任务交给Mesos调度，Mesos支持粗粒度以及细粒度调度（参考第一章）
 #### 2.2.2 RDD算子
 RDD的基本算子包括三种：转化算子（Transformation）、行动算子（Action）、控制算子（Controller）。
 1. 转化算子：包括map、filter、flatMap、sample、groupByKey，将一个RDD转化为新的RDD
-2. 行动算子：包括count、coect、reduce、save，将一个RDD转化为Scala基本类型
+2. 行动算子：包括count、collect、reduce、save，将一个RDD转化为Scala基本类型
 3. 控制算子：包括cache、persis指令，将RDD在内存或硬盘中进行缓存
 #### 2.2.3 容错机制
 不同于MapReduce将容错交给YARN处理，Spark针对三大层面（调度层、任务层、节点层），RDD容错有以下处理方法：
@@ -359,11 +364,12 @@ RDD的基本算子包括三种：转化算子（Transformation）、行动算子
 #### 2.2.4 Shuffle
 与MR类似，Spark的两个Stage之间通过Shuffle进行连接，前一个Stage的最后一个RDD作为Map任务，后一个Stage的第一个RDD作为Reduce任务。
 Spark的Shuffle实现方式包括Hash Based Shuffle（弃用）和Sort Based Shuffle，其中Hash Based Shuffle会产生多个临时文件并影响性能，在Spark1.2及后续版本中已经弃用。    
-当分区数较少时（小于200）并且Map任务没有聚合操作，会采用BypassMergeSortShuffleWriter（没有排序，最终合并成一个文件）进行溢写磁盘，当分区数少于16777216并且没有Map端聚合操作时，采用UnsafeShuffleWriter（分区内有序）进行溢写磁盘，其他情况采用SortShuffleWriter（全局有序）进行溢写。
+当分区数较少时（小于200）并且Map任务没有聚合操作（没有aggregator），会采用BypassMergeSortShuffleWriter（没有排序，最终合并成一个文件）进行溢写磁盘，当分区数少于16777216并且没有Map端聚合操作时，采用UnsafeShuffleWriter（分区内有序，由于没有序列化，不支持Aggregator）进行溢写磁盘，其他情况采用SortShuffleWriter（全局有序）进行溢写。
 相比于MR的Shuffle做出的优化：
-1. 对分区数少并且没有聚合类shuffle算子（reduceByKey）不进行排序，提高了性能。
-2. 采用AppendOnlyMap/ExternalAppendOnlyMap减少了内存使用量
+1. 对分区数少并且没有聚合类shuffle算子（reduceByKey）不进行排序，提高了性能
+2. 采用AppendOnlyMap/ExternalAppendOnlyMap（二分探测法实现的Map）做缓存，减少磁盘IO
 3. 对于Shuffle read的文件为本地文件，MR采用网络下载数据，Spark直接读取本地文件
+#### todo shuffle源码分析
 #### 2.2.5 内存结构
 Spark运行在JVM上，因此Spark包含由JVM管理的堆内内存以及通过JDK Unsafe操作的堆外内存，其中Spark程序中一般对象所占用的内存为堆内内存，堆外内存用作提高Shuffle时排序的效率。  
 Spark的内存分配经过1. 静态内存管理机制 2. 统一内存管理机制。其中1.静态内存管理的堆内分配如图所示：
@@ -439,6 +445,11 @@ DStream提供了窗口操作，即隔一段时间处理一个窗口时间段的�
 > 图片来源Spark官网
 #### 3.1.4 反压机制
 当微批的处理时间大于接受数据的间隔间隔，会导致内存积压最终OOM的情况，在Spark Streaming1.5版本之前可以设置参数spark.streaming.receiver.maxRate限制接受速率，在1.5版本之后Spark Streaming引入了动态反压机制，通过动态控制数据接受速率来适配集群数据处理能力。
+#### 3.1.5 exactly-once语义
+当系统集成使用Kafka、Spark Streaming和HDFS时并希望得到Exactly Once语义时，需要保证输入、处理和输出都为Exactly Once特性。  
+由于RDD容错、不可变和计算确定的特性，Spark Streaming在处理时可以获得Exactly Once的语义，如果接入Kafka的Direct API，即可保证，输入也是Exactly Once。当Spark Streaming输出时，一般采用foreachRDD的方式调用，但该方法失败时会重复调用，直到成功为止。为了实现输出过程的Exactly Once语义，需要添加（1）幂等性写入或（2）事务性写入。
+1. 幂等性写入：适用于带有主键且仅适用Map-Only算子的数据，由于自带主键，当重复写入多条时也不会产生多个相同结果
+2. 事务性写入：需要手动产生一个唯一ID，可以包括分区号、Kafka偏移量，之后利用**事务**将处理结果和ID一同写入数据库（失败时自动回滚）
 ### 3.2 Flink
 Flink是一个分布式处理引擎，支持实时流处理以及批处理，把批处理当做流处理的一个特例（Spark把流处理看作一系列批处理），进行实时流处理时，数据流是无界的，进行批处理时，数据流是有界的。同时，Flink支持Local（调试）、Standalone、YARN以及Kubernetes等多种方式部署。  
 Flink的特点：
@@ -516,6 +527,7 @@ Flink的容错机制是在分布式快照算法Chandy-Lamport的基础上实现�
 Flink的反压机制分为：TaskManager内部的反压以及跨TaskManager的反压  
 TaskManager内部的反压实现原理：Flink使用一个进程管理两个Task，Task之间可通过堆上的阻塞缓冲区进行通信，当任务A的下游任务是任务B，如果任务B的速度比任务A慢，任务B将会在阻塞缓冲区中积累大量数据以至于大小超出限制，不能插入新的数据，导致任务A也得不到空余内存用来处理新的数据，造成任务A的减速。  
 跨TaskMangager的反压实现原理：Flink内部使用Netty发送与接收数据，假设任务B是跨TaskManager的任务A的下游，任务B的速度较慢，分配给Netty的内存（Network Buffer））很快被占满，以至于任务A不能再发送新的数据给任务B，导致任务A所拥有的Network Buffer也占满，造成阻塞
+#### 3.2. CEP
 ### 3.3 Storm
 #### 3.3.1 系统架构
 #### 3.3.2 容错机制
@@ -791,20 +803,70 @@ Redis是一种NoSQL数据库，与HBase不同，Redis的数据是保存在内存
 ## 7. SQL查询引擎
 介绍三种常用SQL执行引擎，分别适用于离线处理、准实时处理和实时处理
 ### 7.1 Hive SQL
-Hive是基于Hadoop的数仓工具，将SQL转化为MR任务（Spark、Tez），并将数据存储在HDFS上，适合离线批量数据计算和数据分析，即数仓和OLAP
-#### 7.1.1 Hive系统结构
+Hive是基于Hadoop的数仓工具，将SQL转化为MR任务（Spark、Tez），并将数据存储在HDFS上，适合离线批量数据计算和数据分析，即数仓和OLAP。Hive具有以下特点：
+1. 采用Hive QL（HQL）进行查询，支持自定义函数
+2. 容错，底层将数据存储在HDFS，将SQL执行脚本转化为MR并运行在YARN上
+3. 可处理超大规模数据集，同时执行延迟也高，不适合小数据的分析
+4. 适合一次写入多次读取
+#### 7.1.1 应用场景
+1. 日志分析，包括访问记录的PV，UV
+2. 海量结构化数据离线分析
+3. ETL数据清洗
+#### 7.1.2 Hive系统结构
 Hive包含Driver、MetaStore以及执行引擎，Driver负责将SQL解析，进行优化输出为MR、Spark或Tez任务。Metastore负责存储和管理元信息服务，保存了数据库的基本信息和数据库表的定义，一般存储在关系型数据库上（如Mysql），执行引擎包含MR、Spark和Tez，根据采用的框架转化为相应的任务。
 > ![Image text](./Hive/HiveArchitecture.png)  
 > 图片来源于Hortonworks
+#### 7.1.3 Hive数据类型
+Hive底层由Java语言编写，因此提供的数据格式与Java类似，包括：
+1. TINYINT，1字节有符号整数，类似Java的byte
+2. SMALLINT，2字节有符号整数，类似Java的short
+3. INT，4字节有符号整数，类似Java的int
+4. BIGINT，8字节有符号整数，类似Java的long
+5. BOOLEAN，布尔变量，类似Java的boolean
+6. FLOAT，4字节浮点数（单精度），类似Java的float
+7. DOUBLE，8字节浮点数（双精度），类似Java的double
+8. STRING，字符串，类似Java的string
+9. TIMESTAMP，时间戳
+10. BINARY，字节数组
+11. STRUCT，结构体，通过".first .second"访问，类似C语言的struct
+12. MAP，键值对，通过键名进行访问，类似Java的map
+13. ARRAY，数组，通过下标进行访问，类似Java的数组
+#### 7.1.4 分区和分桶
+Hive在逻辑上，分区的表跟没分区的表表现一致，在物理存储上，Hive按照分区列的值将数据存储在表目录下的子目录中，子目录名=“分区键=键值”，键值可以是任意值，同时可以对表的分区进行删除、重命名、清空等操作。  
+Hive的分区包括**单值分区**（**静态分区**、**动态分区**）和**范围分区**，单值分区中根据分区键值的多少建立相应的子文件夹，每个分区键值对应一个子文件夹。其中，在插入Hive表的静态分区时需要明确指定分区键值，而在插入Hive表的动态分区时可以根据子查询的结果由系统进行选择分区。范围分区可以根据分区键值的范围指定分区。  
+Hive分桶指的是根据表的某一列的哈希值分散到多个文件中，这些文件被称为桶，Hive中的一个表可以同时分区分桶，每个分区内都会有N个桶。分桶有利于查询、JOIN以及采样操作。
+#### 7.1.5 存储和压缩格式
+Hive支持**TEXTFILE**（基于行）、**SEQUENCEFILE**（基于行）、**ORC**（基于列）、**PARQUET**（基于列）等文件存储格式。  
+1. TEXTFILE，Hive表默认格式，数据不做压缩，磁盘开销大，可以使用Gzip压缩，但压缩后的文件不支持Split，从而无法并行
+2. SEQUENCEFILE，以KeyValue的形式序列化到文件中，支持三种压缩模式：None、Record、Block，压缩后的文件支持Split，可以并行处理
+3. ORC，根据行组分割整个表，每个行组以按列存储，具有多种压缩方式，具有很高的压缩比，支持Split并可以并行处理，提供多种索引并支持复杂数据结构如（Map）
+4. Parquet，以二进制的方式存储，类似ORC格式，按行分组，每个行组按列存储，支持并行处理
 
+在不压缩的情况下，存储相同文件所需空间大小比较：TEXTFILE>SEQUENCEFILE>PARQUET>ORC，文件的查询速度比较：几种存储格式的查询速度类似。  
+下面是常用的压缩算法对比，其中BZip2和GZip适合于磁盘空间有限以及磁盘IO成为瓶颈时使用，LZO适合于需要读取速度较快时使用，Snappy适合于开启中间数据压缩时使用。
+> ![Image text](./Hive/HiveCompression.png)  
+> 图片来源于CSDN
+#### 7.1.6 Hive排序
+全局排序：采用order by可进行全局排序，但缺点是性能低下，优化方式是采用sort by加order by，先reduce排序，然后再归并排序，加快效率。  
+二次排序：采用distribute by+sort by，distribute by将相同字段的map发送到一个Reduce上执行，sort by再根据排序字段进行排序，如果distribute by和sort by字段一致且需要升序排序，可采用cluster by代替。 
+#### 7.1. 严格模式
+在Hive中，开启严格模式可以帮助用户编写更加高效的SQL，当开启严格模式时：
+1. 对于分区表，只允许执行带有分区过滤字段的SQL语句
+2. order by SQL语句必须带有limit关键词
+3. 不允许出现笛卡尔查询的SQL，可使用join代替
 ### 7.2 Spark SQL
+Spark SQL是Spark技术生态的重要一员，提供了两个类（DataFrame、DataSet）来简化RDD的开发，提高开发效率。
+#### 7.2.1 DataFrame
+DataFrame是一种以RDD为基础的分布式数据集，与RDD的区别在于，DataFrame带有schema元信息，即每一列的名称和类型。由于新增加的Schema信息，可为DataFrame带来了更多的优化，基于Spark Catalyst优化器，提供如列裁剪，谓词下推，map join等优化。同时，采用code generation ，动态编译表达式，提升性能，比用rdd的自定义函数性能高5倍左右。
+#### 7.2.2 DataSet
+DataSet是DataFrame的拓展，用样例类定义每一行数据的结构信息，既包含RDD能提供的强类型特点，也包含DataFrame的SQL执行优化特点。
 ### 7.3 Flink SQL
 
 ## 8. 即席查询
 即席查询是用户根据自己的需求，灵活的选择查询条件，系统能够根据用户的选择生成相应的统计报表。即席查询与普通应用查询最大的不同是普通的应用查询是定制开发的，而即席查询是由用户自定义查询条件的。以下介绍三种即席查询工具。
 ### 8.1 Kylin
-Apache Kylin是一个开源的分布式分析引擎，提供Hadoop之上的SQL查询接口及多维分析（OLAP）能力以支持超大规模数据，最初由eBay Inc. 开发并贡献至开源社区。它能在亚秒内查询巨大的Hive表。
-#### 8.1. Kylin核心概念
+Apache Kylin是一个开源的分布式**分析引擎**，提供Hadoop之上的SQL查询接口及多维分析（OLAP）能力以支持超大规模数据，最初由eBay Inc. 开发并贡献至开源社区。它能在亚秒内查询巨大的Hive表。
+#### 8.1.1 Kylin核心概念
 Kylin的工作原理是MOLAP（Multidimension On-Line Analysis Processing）Cube，即多维立方体分析。接下来介绍Cube和Cuboid。
 1. 给定一个数据模型，我们可以对其所有维度进行聚合，对于N个维度来说，组合的可能性有2的n次方钟，对于每一种维度的组合，将度量值做聚合计算，然后将结果保存为一个物化视图，称为Cuboid
 2. 所有维度组合的Cuboid作为一个整体，成为Cube。
@@ -821,15 +883,100 @@ Kylin的工作原理是MOLAP（Multidimension On-Line Analysis Processing）Cube
 4. 衍生模式（Derived），指的是一个或多个维度可以由另一个维度生成，设置了衍生关系（如A->B，A->C）时，Cube的构建会包含A而没有B和C
 5. 联合模式（Joint），规定某些维度（如维度A和B）只能同时出现，Cube的构建包含那些AB同时出现的Cuboid或AB同时不出现的Cuboid
 #### 8.1. Cube构建算法
-##### 8.1. .1 逐层构建
+##### 8.1.2.1 逐层构建
 一个N维的Cube由一个N维子立方体、N个（N-1）维子立方体...N个1维子立方体和1个0维子立方体组成，按照逐层算法，每个层级都是按照它上一层级的结果来计算的，如N个（N-1）维的子立方体是由1个N维的子立方体去掉某个维度进行计算的。
-##### 8.1..2 快速Cube算法（逐段算法）
+##### 8.1.2.2 快速Cube算法（逐段算法）
 主要思想为：每个Mapper将所分配到的数据库计算成一个完成的Cube（包含所有Cuboid），每个Mapper将计算完的Cube输出到Reduce合并，生成大Cube。
-#### 8.1. Cube在HBase中的存储
+#### 8.1.3 Cube在HBase中的存储
 每个Cuboid将会存储在HBase中，Cuboid的维度会映射为HBase的Rowkey，Cuboid的指标映射为HBase的Value。
 
 如图所示，原始表中有两个维度，kylin对维度值进行字典编码，拼接在Rowkey的“+”号后方，在“+”号的前方是确定哪些维度被选中
 > ![Image text](./Kylin/CubeHBase.png)  
 > 图片来源于CSDN
-### 8.2 Impala
-### 8.3 Presto
+#### 8.1.4 查询效率优化
+得益于预构建Cube（根据数据量的大小，构建时间从数分钟到数小时不等），Kylin在超大规模数据集上（只要能构建出Cube），都能实现**亚秒级**查询Hive表的能力，为进一步压缩Kylin的查询效率，可通过以下方法进行优化。
+##### 8.1.4.1 Kylin维度组合模式
+可以通过计算当前Cube的大小除以源数据的大小得到Cube的**膨胀率**，当膨胀率大于1000%时，为避免Kylin的Cube维度指数增加，需要考虑以下几种Cube**组合模式**进行降维。  
+1. 正常模式（Normal），N个维度构建2的N次方个Cuboid
+2. 维度强制模型（Mandatory），当某个维度（如时间维度）设置为Mandatory模式，Cube的构建只会包含时间维度的Cuboid。
+3. 依赖模式（Hierarchy），给定依赖关系（如省份依赖于国家），Cube的构建只会包含符合该依赖关系的Cuboid
+4. 衍生模式（Derived），指的是一个或多个维度可以由另一个维度生成，设置了衍生关系（如A->B，A->C）时，Cube的构建会包含A而没有B和C，查询BC时需要将A替换成BC
+5. 联合模式（Joint），规定某些维度（如维度A和B）只能同时出现，Cube的构建包含那些AB同时出现的Cuboid或AB同时不出现的Cuboid
+##### 8.1.4.2 RowKey优化
+由于Kylin将构建好的Cuboid按照Cuboid的维度映射成RowKey存储到HBase中，而HBase的查询效率部分取决于RowKey的设计，通过以下两种方式可提高HBase的查询效率：
+1. 用作Where过滤的维度放在前边，由于HBase根据RowKey进行排序，相同前缀的RowKey按顺序存储，因此被Where过滤的维度放在前面有利于顺序查询
+2. 基数大的放在基数小的前边，在构建Cube的时候，每一级的Cuboid都会由上一级的Cuboid构建而成，Kylin默认使用Cuboid Id较小的进行构建下一级，因此，基数大放在前面有利于加快Cuboid的构建
+##### 8.1.4.3 并发粒度优化
+Kylin提供了三个参数对Cuboid数据在HBase分片的控制，分别是：
+> kylin.hbase.region.cut 
+> kylin.hbase.region.count.min
+> kylin.hbase.region.count.max
+
+**kylin.hbase.region.cut** （默认5GB）参数意味着每个HBase的分区大小是多少，也就是说对于一个大小估计是50GB的Segment，构建引擎会给它分配10个分区，同时**kylin.hbase.region.count.min**和**kylin.hbase.region.count.max**将会决定最后存储在HBase的最少以及最多的分区数。
+#### 8.1.5 增量Cube
+增量与全量Cube的区别：
+1. 全量：每次构建或更新Cube的时候，不会区分历史数据和新加入的数据，意味着构建Cube时，直接导入和处理所有数据
+2. 增量：将Cube划分成多个Segment，每个Segment代表一段时间的Cube预计算结果，更新Cube时，只会计算新一段时间加入的数据
+
+每个Segment将会存储于HBase不同的表，同时，Segment自身具有多个分区，因此，当需要进行查询时，可能会由于不同表以及不同分区的影响，降低查询效率。可采用以下参数配置优化增量Cube：
+1. 自动合并时间阈值，用户可设置多层时间阈值，当满足某一层（从大到小）的时间阈值时，合并成一个Segment
+2. 自动清理时间阈值，当不需要保留超过一定时间的Segment时，可设置自动清理时间阈值，当超过一定时间时，Kylin会自动清理该Segment以减少存储压力
+### 8.2 Presto
+Presto是一个开源的分布式**SQL查询引擎**，支持GB到PB级的数据量，同时具有以下特点：
+1. 基于内存运算，减少不必要的磁盘IO
+2. 支持多个数据源跨表连查，比如从Hive查询访问记录，从Mysql匹配设备信息
+3. 不需要HDFS，可独立部署
+4. 流水线计算作业，达到接近实时查询的要求
+#### 8.2.1 应用场景
+1. 虚拟的统一数据仓库，能够连接多个数据源，在不同数据源上使用相同语法的SQL和SQL Function
+2. ETL工具，连接多个数据源，实现从一个数据源拉取（Exact）、转换（Transform）和加载（Load）到另一个数据源
+3. 加快Hive的查询
+#### 8.2.2 Presto架构
+Presto的架构如图所示，包括一个Coordinator和多个Worker组成：
+> ![Image text](./Presto/PrestoArchitecture.png)  
+> 图片来源于尚硅谷
+### 8.3 Druid
+与Kylin、Presto不同，Apache Druid是一个集时间序列数据库、数据仓库和全文检索系统特点于一体的高性能实时分析型**数据库**，提供OLAP查询能力，并且具有以下特点：
+1. 列式存储，单独存储并压缩每一列数据，查询只查询特定需要查询的数据，支持快速Scan、Ranking和GroupBy
+2. 可拓展，支持数十到数百台服务器集群，支持数百万记录的接收速率，数万亿数据的保存和亚秒到秒级的查询效率
+3. 实时摄取，支持从Kafka和HDFS等数据源实时摄取数据，并对这些数据进行实时查询
+4. 提供近似计算，包括近似count-distinct，近似排序以及近似直方图和分位数计算的算法。这些算法占用有限的内存使用量，通常比精确计算要快得多。
+#### 8.3.1 应用场景
+Druid通常应用于以下场景：
+1. 点击流分析（客户端）
+2. 网络性能检测分析
+3. 服务指标分析
+4. 数字广告分析
+5. OLAP
+#### 8.3.2 Druid架构
+Druid的架构如图所示，包括以下角色节点：
+1. 统治者节点（Overlord），负责接收数据摄取任务，并分配任务到中间管理节点
+2. 中间管理节点（MiddleManagers），负责读取数据并生成Segment数据文件
+3. 协调节点（Coordinator），负责历史节点的负载均衡
+4. 历史节点（Historical），加载已生成的Segment文件，提供数据查询
+5. 查询节点（Broker），接收客户端的查询请求，转发查询请求到中间管理节点和历史节点
+> ![Image text](./Druid/DruidArchitecture.png)  
+> 图片来源于尚硅谷
+#### 8.3.3 Druid存储结构
+Druid的数据被存储在DataSources中，可根据时间或其他属性进行分区，每个区称为一个块（Chunk），同时每个块由数百万条数据的段（Segment）文件组成，如图所示：
+> ![Image text](./Druid/DruidTimeline.png)  
+> 图片来源于Druid官网
+#### 8.3.4 Druid查询优化
+Druid的查询效率高得益于以下技术点：
+1. 数据预聚合，Druid将会把一行数据划分成三个部分：时间戳列、维度列和指标列。当数据录入到系统时，将会先按照全维度聚合要计算的指标，后续的查询都是通过预聚合的中间结果作二次查询
+2. 数据分区以及列式存储，将数据按照时间进行分区（横向切割），同时采用列式存储（纵向切割），可生产一个紧凑且支持快速查询的数据文件，减少全表扫描，加快查询效率
+3. Bitmap索引，为每一行的列取值生成Bitmap集合，例如，第一行和第四行的Gender为Male，生成Bitmap“1001”，第一行和第二行的City为“Beijing”，生成Bitmap为“1100”，当查询Gender=“Male”和City=“Beijing”时，仅需要将Bitmap进行按位与操作就可定位到第二行的数据了
+4. mmap，采用mmap优化读取性能
+5. 查询结果的中间缓存，通过查询节点的缓存优化相同读取请求
+#### 8.3.5 Druid容错
+中间管理节点在处理实时流数据时会定期做checkpoint，但是为了提高写入性能没有采用预写日志（WAL），因此当中间管理节点停机时，可能会造成数据丢失
+#### 8.3.6 Druid近似算法
+1. 采用HyperLogLog的变种算法计算Count Distinct，HyperLogLog算法思想为计算每个数值的Hash的连续前导0来反推出现这样数的概率
+2. 采用近似Top K算法（取分块后的前K个再进行聚合）计算Top K
+### 8.4 三者对比
+| 技术 | 用途 |支持数据源|查询效率|处理模式|
+|:---:|:---:|:---:|:---:|:---:|
+|**Kylin**|实时分析引擎|少|亚秒级|预构建|
+|**Druid**|SQL执行引擎|少|亚秒级到秒级|实时处理|
+|**Presto**|实时数据库|多|秒级|流水线|
+
